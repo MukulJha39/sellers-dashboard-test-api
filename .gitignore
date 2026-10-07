@@ -147,3 +147,11 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# --- SellersDash API ---
+dist/
+.env
+.env.*
+!.env.example
+uploads/*
+!uploads/.gitkeep
