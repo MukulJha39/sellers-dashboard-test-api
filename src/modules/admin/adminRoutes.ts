@@ -76,6 +76,9 @@ import {
   getAdminServices,
   getAdminStockMovements,
   getMerchantBusiness,
+  deleteAdminItem,
+  deleteAdminMaterial,
+  deleteAdminService,
   getMerchantCatalogSummary,
   getMerchantCategories,
   patchAdminItem,
@@ -354,6 +357,20 @@ adminRouter.post(
   asyncHandler(adminItemArchiveHandler(false)),
 );
 
+/*
+ * Permanent catalog deletion.
+ *
+ * Separate permissions from ITEM_MANAGE and friends, because archiving is reversible
+ * and this is not. The service refuses a record that any order or purchase still refers
+ * to, so an admin cannot erase something a merchant's history depends on.
+ */
+adminRouter.delete(
+  '/items/:id',
+  requirePermission(PERMISSIONS.ITEM_DELETE),
+  ...validate(itemIdParamRules),
+  asyncHandler(deleteAdminItem),
+);
+
 adminRouter.patch(
   '/services/:id',
   requirePermission(PERMISSIONS.SERVICE_MANAGE),
@@ -373,6 +390,13 @@ adminRouter.post(
   requirePermission(PERMISSIONS.SERVICE_MANAGE),
   ...validate(itemIdParamRules),
   asyncHandler(adminServiceArchiveHandler(false)),
+);
+
+adminRouter.delete(
+  '/services/:id',
+  requirePermission(PERMISSIONS.SERVICE_DELETE),
+  ...validate(itemIdParamRules),
+  asyncHandler(deleteAdminService),
 );
 
 adminRouter.patch(
@@ -395,6 +419,13 @@ adminRouter.post(
   requirePermission(PERMISSIONS.MATERIAL_MANAGE),
   ...validate(itemIdParamRules),
   asyncHandler(adminMaterialArchiveHandler(false)),
+);
+
+adminRouter.delete(
+  '/materials/:id',
+  requirePermission(PERMISSIONS.MATERIAL_DELETE),
+  ...validate(itemIdParamRules),
+  asyncHandler(deleteAdminMaterial),
 );
 
 /* An admin correcting stock goes through the same ledger as the merchant app. */

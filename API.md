@@ -396,6 +396,7 @@ the merchant before they archive.
 `POST /api/v1/items` · `GET /api/v1/items/:id` · `PATCH /api/v1/items/:id`
 `POST /api/v1/items/:id/archive` · `POST /api/v1/items/:id/restore`
 `PUT /api/v1/items/:id/image` · `DELETE /api/v1/items/:id/image`
+`DELETE /api/v1/items/:id` — permanent, see [Deleting a catalog record](#deleting-a-catalog-record)
 
 **ItemView**
 
@@ -439,6 +440,7 @@ Searching treats the term as literal text, not as a pattern, so a merchant typin
 `POST /api/v1/services` · `GET /api/v1/services/:id` · `PATCH /api/v1/services/:id`
 `POST /api/v1/services/:id/archive` · `POST /api/v1/services/:id/restore`
 `PUT /api/v1/services/:id/image` · `DELETE /api/v1/services/:id/image`
+`DELETE /api/v1/services/:id` — permanent, see [Deleting a catalog record](#deleting-a-catalog-record)
 
 `billingUnit` is one of `one_time`, `hourly`, `per_session`, `per_unit`, `package`.
 `durationMinutes` is kept only for `hourly` and `per_session`; changing the billing
@@ -453,6 +455,7 @@ which retires the record.
 `POST /api/v1/materials` · `GET /api/v1/materials/:id` · `PATCH /api/v1/materials/:id`
 `POST /api/v1/materials/:id/archive` · `POST /api/v1/materials/:id/restore`
 `PUT /api/v1/materials/:id/image` · `DELETE /api/v1/materials/:id/image`
+`DELETE /api/v1/materials/:id` — permanent, see [Deleting a catalog record](#deleting-a-catalog-record)
 
 Same stock fields as an item, plus `purchaseCostMinor`, `batchReference`, `expiryDate`
 and `supplierName`. `supplierName` is free text for now; suppliers become records of
@@ -537,6 +540,53 @@ change nothing.
 Refusing is the point. Silently dropping the field would let a client believe it had
 written a quantity, and the ledger would then disagree with what the merchant was shown.
 The same guard runs on the admin equivalents.
+
+### Deleting a catalog record
+
+`DELETE /api/v1/items/:id` · `DELETE /api/v1/services/:id` · `DELETE /api/v1/materials/:id`
+
+Permanent, and not the same thing as archiving. Archiving hides a record and can be
+undone; deleting removes the document, its stock ledger and its uploaded image, and
+cannot. Both are offered because they answer different questions: "I no longer sell
+this" is an archive, "I typed this in by mistake" is a delete.
+
+A delete is refused with `409 RECORD_IN_USE` while any order or purchase still refers to
+the record:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "RECORD_IN_USE",
+    "message": "This item is used by 3 orders and cannot be deleted. Archive it instead to hide it without losing that history.",
+    "meta": { "orders": 3, "purchases": 0 }
+  }
+}
+```
+
+Order and purchase lines keep their own `name` and rates, so a delete would not change
+what a customer was charged. What it would break is the link back — the lists that
+answer "what have I sold of this?" — and it would destroy the stock history explaining
+how the quantity got where it is. `meta.orders` and `meta.purchases` are there so the
+client can say how much history is at stake before offering archive as the alternative.
+
+Nothing is removed on the way to a refusal. A successful delete returns the name it
+removed, and the number of stock movements that went with it:
+
+```json
+{ "success": true, "data": { "deleted": true, "name": "Clay Cup", "stockMovementsDeleted": 4 } }
+```
+
+A service carries no stock, so its response omits `stockMovementsDeleted`. Deletions are
+written to the audit trail as `item.deleted`, `service.deleted` and `material.deleted`,
+attributed to whoever performed them.
+
+On the admin side the same rules apply, under their own permissions — `item.delete`,
+`service.delete` and `material.delete`, which are deliberately **not** granted to the
+operations role by default. Archiving is reversible and sits under `*.manage`; permanent
+deletion is seeded to the super administrator alone and is handed out through the role
+matrix where a deployment wants it wider. The admin responses also carry `merchantId`,
+naming the business the record belonged to.
 
 ---
 
@@ -1444,10 +1494,13 @@ Entries carry `actorLabel`, `action`, `summary` and a `changes` array of `{ fiel
 | `GET /admin/merchants/:merchantId/categories` | `item.view` |
 | `GET /admin/items` | `item.view` |
 | `PATCH /admin/items/:id` · `…/archive` · `…/restore` | `item.manage` |
+| `DELETE /admin/items/:id` | `item.delete` |
 | `GET /admin/services` | `service.view` |
 | `PATCH /admin/services/:id` · `…/archive` · `…/restore` | `service.manage` |
+| `DELETE /admin/services/:id` | `service.delete` |
 | `GET /admin/materials` | `material.view` |
 | `PATCH /admin/materials/:id` · `…/archive` · `…/restore` | `material.manage` |
+| `DELETE /admin/materials/:id` | `material.delete` |
 | `GET /admin/stock-movements` | `stock.view` |
 | `GET /admin/low-stock` | `stock.view` |
 | `POST /admin/stock/:subjectType/:subjectId/adjust` | `stock.adjust` |
@@ -1539,6 +1592,10 @@ the audit entry names them.
 **Phase 4** — `order.view`, `order.edit`, `order.cancel`, `installment.view`,
 `installment.manage` (`order.create` is the merchant's own path and has no admin
 endpoint: support does not write orders on a merchant's behalf).
+
+**Catalog deletion** — `item.delete`, `service.delete`, `material.delete`. Separate from
+the `*.manage` permissions because archiving is reversible and deletion is not, and
+seeded only to the super administrator.
 
 The full catalogue is seeded (`src/config/permissions.ts`) so later phases add endpoints
 rather than reworking RBAC. Seeded roles: Super administrator, Operations administrator,

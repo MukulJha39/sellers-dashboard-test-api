@@ -7,6 +7,7 @@ import { deleteStoredFile } from '../../services/storageService';
 import { AppError } from '../../utils/AppError';
 import { describeMoneyMinor } from '../../utils/money';
 import { escapeRegex, type Pagination } from '../../utils/pagination';
+import { assertCatalogRecordDeletable } from './catalogReferences';
 import { resolveCategoryId } from './categoryService';
 import type { StockActor } from './stockService';
 
@@ -220,6 +221,43 @@ export async function setServiceArchived(input: {
   });
 
   return service;
+}
+
+/**
+ * Permanently removes a service and its image.
+ *
+ * A service carries no stock, so there is no ledger to unwind and no transaction to
+ * span: the single document delete is atomic on its own. It is still refused while an
+ * order refers to the service, for the same reason an item is.
+ */
+export async function deleteService(input: {
+  merchantId: Types.ObjectId;
+  serviceId: string;
+  actor: StockActor;
+  req?: Request;
+}): Promise<{ name: string }> {
+  const service = await loadService(input.merchantId, input.serviceId);
+  await assertCatalogRecordDeletable(input.merchantId, 'service', service._id);
+
+  const name = service.name;
+  const imageUrl = service.imageUrl ?? null;
+  const rateMinor = service.rateMinor;
+
+  await ServiceOffering.deleteOne({ _id: service._id, merchantId: input.merchantId });
+  await deleteStoredFile(imageUrl);
+
+  await writeAudit({
+    actorType: input.actor.type,
+    actorId: input.actor.id ?? null,
+    actorLabel: input.actor.label,
+    action: 'service.deleted',
+    targetType: 'service',
+    targetId: service._id,
+    summary: `Service "${name}" permanently deleted (was ${describeMoneyMinor(rateMinor)}).`,
+    req: input.req,
+  });
+
+  return { name };
 }
 
 export async function replaceServiceImage(input: {

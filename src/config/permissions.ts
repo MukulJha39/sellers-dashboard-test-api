@@ -24,10 +24,13 @@ export const PERMISSIONS = {
 
   ITEM_VIEW: 'item.view',
   ITEM_MANAGE: 'item.manage',
+  ITEM_DELETE: 'item.delete',
   SERVICE_VIEW: 'service.view',
   SERVICE_MANAGE: 'service.manage',
+  SERVICE_DELETE: 'service.delete',
   MATERIAL_VIEW: 'material.view',
   MATERIAL_MANAGE: 'material.manage',
+  MATERIAL_DELETE: 'material.delete',
   STOCK_VIEW: 'stock.view',
   STOCK_ADJUST: 'stock.adjust',
 
@@ -67,7 +70,7 @@ export const PERMISSION_GROUPS: ReadonlyArray<{ group: string; permissions: Perm
   { group: 'Businesses', permissions: [PERMISSIONS.BUSINESS_VIEW, PERMISSIONS.BUSINESS_EDIT] },
   { group: 'Customers', permissions: [PERMISSIONS.CUSTOMER_VIEW, PERMISSIONS.CUSTOMER_CREATE, PERMISSIONS.CUSTOMER_EDIT, PERMISSIONS.CUSTOMER_ARCHIVE] },
   { group: 'Suppliers', permissions: [PERMISSIONS.SUPPLIER_VIEW, PERMISSIONS.SUPPLIER_MANAGE] },
-  { group: 'Catalog & stock', permissions: [PERMISSIONS.ITEM_VIEW, PERMISSIONS.ITEM_MANAGE, PERMISSIONS.SERVICE_VIEW, PERMISSIONS.SERVICE_MANAGE, PERMISSIONS.MATERIAL_VIEW, PERMISSIONS.MATERIAL_MANAGE, PERMISSIONS.STOCK_VIEW, PERMISSIONS.STOCK_ADJUST] },
+  { group: 'Catalog & stock', permissions: [PERMISSIONS.ITEM_VIEW, PERMISSIONS.ITEM_MANAGE, PERMISSIONS.ITEM_DELETE, PERMISSIONS.SERVICE_VIEW, PERMISSIONS.SERVICE_MANAGE, PERMISSIONS.SERVICE_DELETE, PERMISSIONS.MATERIAL_VIEW, PERMISSIONS.MATERIAL_MANAGE, PERMISSIONS.MATERIAL_DELETE, PERMISSIONS.STOCK_VIEW, PERMISSIONS.STOCK_ADJUST] },
   { group: 'Purchases', permissions: [PERMISSIONS.PURCHASE_VIEW, PERMISSIONS.PURCHASE_MANAGE] },
   { group: 'Orders', permissions: [PERMISSIONS.ORDER_VIEW, PERMISSIONS.ORDER_CREATE, PERMISSIONS.ORDER_EDIT, PERMISSIONS.ORDER_CANCEL] },
   { group: 'Payments', permissions: [PERMISSIONS.PAYMENT_VIEW, PERMISSIONS.PAYMENT_MANAGE, PERMISSIONS.INSTALLMENT_VIEW, PERMISSIONS.INSTALLMENT_MANAGE] },
@@ -84,6 +87,19 @@ const VIEW_ONLY_PERMISSIONS: Permission[] = ALL_PERMISSIONS.filter((permission) 
  * than an operational one and is not handed out with general read access.
  */
 const ADMINISTRATIVE_VIEWS: Permission[] = [PERMISSIONS.ADMIN_VIEW, PERMISSIONS.ROLE_VIEW, PERMISSIONS.AUDIT_VIEW];
+
+/**
+ * Permanently removing a catalog record is the one catalog action that cannot be undone:
+ * archiving hides a record but keeps it, deletion destroys it along with its stock ledger.
+ * It is therefore withheld from the operational roles by default and granted only to the
+ * super administrator. A deployment that wants it elsewhere grants it through the role
+ * matrix rather than by widening a seed.
+ */
+const CATALOG_DELETE_PERMISSIONS: Permission[] = [
+  PERMISSIONS.ITEM_DELETE,
+  PERMISSIONS.SERVICE_DELETE,
+  PERMISSIONS.MATERIAL_DELETE,
+];
 
 /** Everything an operational role may read: all view permissions except the administrative ones. */
 const OPERATIONAL_VIEWS: Permission[] = VIEW_ONLY_PERMISSIONS.filter(
@@ -111,10 +127,17 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
   {
     slug: 'operations_admin',
     name: 'Operations administrator',
-    description: 'Runs day-to-day operations across merchants, catalog, orders and reminders, without administering the admin team.',
+    description: 'Runs day-to-day operations across merchants, catalog, orders and reminders, without administering the admin team or permanently deleting catalog records.',
     permissions: ALL_PERMISSIONS.filter(
       (permission) =>
-        !([PERMISSIONS.ADMIN_MANAGE, PERMISSIONS.ROLE_MANAGE, PERMISSIONS.MERCHANT_CREATE] as Permission[]).includes(permission),
+        !(
+          [
+            PERMISSIONS.ADMIN_MANAGE,
+            PERMISSIONS.ROLE_MANAGE,
+            PERMISSIONS.MERCHANT_CREATE,
+            ...CATALOG_DELETE_PERMISSIONS,
+          ] as Permission[]
+        ).includes(permission),
     ),
   },
   {

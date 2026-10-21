@@ -8,6 +8,8 @@ import { deleteStoredFile } from '../../services/storageService';
 import { AppError } from '../../utils/AppError';
 import { escapeRegex, type Pagination } from '../../utils/pagination';
 import { fromThousandths } from '../../utils/quantity';
+import { withTransaction } from '../../db/transaction';
+import { assertCatalogRecordDeletable, deleteStockLedgerFor } from './catalogReferences';
 import { resolveCategoryId } from './categoryService';
 import { assertQuantityFitsUnit } from './itemService';
 import { recordOpeningStock, type StockActor } from './stockService';
@@ -273,6 +275,54 @@ export async function setMaterialArchived(input: {
   });
 
   return material;
+}
+
+/**
+ * Permanently removes a raw material, its stock ledger and its image.
+ *
+ * Mirrors {@link deleteItem}: refused while a purchase still refers to the material,
+ * and the document and its movements are removed together so the ledger never outlives
+ * its subject. Materials are never sold, so only purchases can hold a reference.
+ */
+export async function deleteMaterial(input: {
+  merchantId: Types.ObjectId;
+  materialId: string;
+  actor: StockActor;
+  req?: Request;
+}): Promise<{ name: string; movementsDeleted: number }> {
+  const material = await loadMaterial(input.merchantId, input.materialId);
+  await assertCatalogRecordDeletable(input.merchantId, 'material', material._id);
+
+  const name = material.name;
+  const imageUrl = material.imageUrl ?? null;
+  const quantityThousandths = material.quantityThousandths;
+  const unit = material.unit;
+
+  const movementsDeleted = await withTransaction(async (session) => {
+    const removed = await deleteStockLedgerFor(input.merchantId, 'material', material._id, session);
+    await RawMaterial.deleteOne(
+      { _id: material._id, merchantId: input.merchantId },
+      session ? { session } : {},
+    );
+    return removed;
+  });
+
+  await deleteStoredFile(imageUrl);
+
+  await writeAudit({
+    actorType: input.actor.type,
+    actorId: input.actor.id ?? null,
+    actorLabel: input.actor.label,
+    action: 'material.deleted',
+    targetType: 'material',
+    targetId: material._id,
+    summary:
+      `Raw material "${name}" permanently deleted with ${fromThousandths(quantityThousandths)} ${unit} in stock ` +
+      `and ${movementsDeleted} stock movement${movementsDeleted === 1 ? '' : 's'} removed.`,
+    req: input.req,
+  });
+
+  return { name, movementsDeleted };
 }
 
 export async function replaceMaterialImage(input: {

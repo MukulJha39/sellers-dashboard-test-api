@@ -16,9 +16,9 @@ import {
   presentStockMovement,
 } from '../catalog/catalogPresenters';
 import { listCategories, loadCategoryNames } from '../catalog/categoryService';
-import { setItemArchived, updateItem } from '../catalog/itemService';
-import { setMaterialArchived, updateMaterial } from '../catalog/materialService';
-import { setServiceArchived, updateService } from '../catalog/serviceCatalogService';
+import { deleteItem, setItemArchived, updateItem } from '../catalog/itemService';
+import { deleteMaterial, setMaterialArchived, updateMaterial } from '../catalog/materialService';
+import { deleteService, setServiceArchived, updateService } from '../catalog/serviceCatalogService';
 import { applyStockMovement, type StockActor } from '../catalog/stockService';
 import { catalogSummary } from '../catalog/summaryService';
 import {
@@ -240,6 +240,30 @@ export function adminItemArchiveHandler(archived: boolean) {
   };
 }
 
+/**
+ * Permanently deletes an item on a merchant's behalf.
+ *
+ * The owning merchant is read from the record rather than the request, so the delete
+ * stays scoped to the business that owns it — the same rule the admin edit and archive
+ * handlers follow.
+ */
+export async function deleteAdminItem(req: Request, res: Response): Promise<void> {
+  const existing = await adminLoadItem(String(req.params.id));
+  const result = await deleteItem({
+    merchantId: existing.merchantId,
+    itemId: String(existing._id),
+    actor: adminActor(req),
+    req,
+  });
+
+  sendData(res, {
+    deleted: true,
+    name: result.name,
+    merchantId: String(existing.merchantId),
+    stockMovementsDeleted: result.movementsDeleted,
+  });
+}
+
 export async function patchAdminService(req: Request, res: Response): Promise<void> {
   const existing = await adminLoadService(String(req.params.id));
 
@@ -270,6 +294,18 @@ export function adminServiceArchiveHandler(archived: boolean) {
   };
 }
 
+export async function deleteAdminService(req: Request, res: Response): Promise<void> {
+  const existing = await adminLoadService(String(req.params.id));
+  const result = await deleteService({
+    merchantId: existing.merchantId,
+    serviceId: String(existing._id),
+    actor: adminActor(req),
+    req,
+  });
+
+  sendData(res, { deleted: true, name: result.name, merchantId: String(existing.merchantId) });
+}
+
 export async function patchAdminMaterial(req: Request, res: Response): Promise<void> {
   const existing = await adminLoadMaterial(String(req.params.id));
 
@@ -298,6 +334,23 @@ export function adminMaterialArchiveHandler(archived: boolean) {
 
     sendData(res, { material: presentRawMaterial(material) });
   };
+}
+
+export async function deleteAdminMaterial(req: Request, res: Response): Promise<void> {
+  const existing = await adminLoadMaterial(String(req.params.id));
+  const result = await deleteMaterial({
+    merchantId: existing.merchantId,
+    materialId: String(existing._id),
+    actor: adminActor(req),
+    req,
+  });
+
+  sendData(res, {
+    deleted: true,
+    name: result.name,
+    merchantId: String(existing.merchantId),
+    stockMovementsDeleted: result.movementsDeleted,
+  });
 }
 
 /**

@@ -55,6 +55,7 @@ import {
 } from './categoryService';
 import {
   createItem,
+  deleteItem,
   ITEM_SORT_FIELDS,
   listItems,
   loadItem,
@@ -66,6 +67,7 @@ import {
 } from './itemService';
 import {
   createMaterial,
+  deleteMaterial,
   listMaterials,
   loadMaterial,
   MATERIAL_SORT_FIELDS,
@@ -77,6 +79,7 @@ import {
 } from './materialService';
 import {
   createService,
+  deleteService,
   listServices,
   loadService,
   replaceServiceImage,
@@ -367,6 +370,23 @@ export async function putItemImage(req: Request, res: Response): Promise<void> {
   sendData(res, { item: presentItem(item) });
 }
 
+/**
+ * Permanently deletes an item. The service refuses this while any order or purchase
+ * still refers to it, so the app can offer delete freely and surface the 409 as a
+ * prompt to archive instead.
+ */
+export async function destroyItem(req: Request, res: Response): Promise<void> {
+  const merchant = merchantContext(req);
+  const result = await deleteItem({
+    merchantId: merchant.objectId,
+    itemId: String(req.params.id),
+    actor: merchantActor(req),
+    req,
+  });
+
+  sendData(res, { deleted: true, name: result.name, stockMovementsDeleted: result.movementsDeleted });
+}
+
 export async function deleteItemImage(req: Request, res: Response): Promise<void> {
   const merchant = merchantContext(req);
   const item = await replaceItemImage({
@@ -497,6 +517,19 @@ export async function putServiceImage(req: Request, res: Response): Promise<void
   });
 
   sendData(res, { service: presentService(service) });
+}
+
+/** Permanently deletes a service. Refused while an order still refers to it. */
+export async function destroyService(req: Request, res: Response): Promise<void> {
+  const merchant = merchantContext(req);
+  const result = await deleteService({
+    merchantId: merchant.objectId,
+    serviceId: String(req.params.id),
+    actor: merchantActor(req),
+    req,
+  });
+
+  sendData(res, { deleted: true, name: result.name });
 }
 
 export async function deleteServiceImage(req: Request, res: Response): Promise<void> {
@@ -637,6 +670,19 @@ export async function putMaterialImage(req: Request, res: Response): Promise<voi
   });
 
   sendData(res, { material: presentRawMaterial(material) });
+}
+
+/** Permanently deletes a raw material. Refused while a purchase still refers to it. */
+export async function destroyMaterial(req: Request, res: Response): Promise<void> {
+  const merchant = merchantContext(req);
+  const result = await deleteMaterial({
+    merchantId: merchant.objectId,
+    materialId: String(req.params.id),
+    actor: merchantActor(req),
+    req,
+  });
+
+  sendData(res, { deleted: true, name: result.name, stockMovementsDeleted: result.movementsDeleted });
 }
 
 export async function deleteMaterialImage(req: Request, res: Response): Promise<void> {

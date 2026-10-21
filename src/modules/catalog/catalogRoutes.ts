@@ -5,8 +5,11 @@ import { asyncHandler, validate } from '../../middleware/validate';
 import {
   categoryArchiveHandler,
   deleteItemImage,
+  destroyItem,
   deleteMaterialImage,
+  destroyMaterial,
   deleteServiceImage,
+  destroyService,
   getCatalogMeta,
   getCatalogSummary,
   getCategories,
@@ -120,6 +123,8 @@ itemRoutes.put(
   asyncHandler(putItemImage),
 );
 itemRoutes.delete('/:id/image', ...validate(itemIdRules), asyncHandler(deleteItemImage));
+// Permanent delete. Refused with 409 RECORD_IN_USE while an order or purchase refers to it.
+itemRoutes.delete('/:id', ...validate(itemIdRules), asyncHandler(destroyItem));
 catalogRouter.use('/items', itemRoutes);
 
 /* --------------------------------- services -------------------------------- */
@@ -146,6 +151,7 @@ serviceRoutes.put(
   asyncHandler(putServiceImage),
 );
 serviceRoutes.delete('/:id/image', ...validate(serviceIdRules), asyncHandler(deleteServiceImage));
+serviceRoutes.delete('/:id', ...validate(serviceIdRules), asyncHandler(destroyService));
 catalogRouter.use('/services', serviceRoutes);
 
 /* -------------------------------- materials -------------------------------- */
@@ -177,6 +183,7 @@ materialRoutes.put(
   asyncHandler(putMaterialImage),
 );
 materialRoutes.delete('/:id/image', ...validate(materialIdRules), asyncHandler(deleteMaterialImage));
+materialRoutes.delete('/:id', ...validate(materialIdRules), asyncHandler(destroyMaterial));
 catalogRouter.use('/materials', materialRoutes);
 
 /* ---------------------------------- stock ---------------------------------- */

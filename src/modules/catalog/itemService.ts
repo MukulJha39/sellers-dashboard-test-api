@@ -10,6 +10,8 @@ import { AppError } from '../../utils/AppError';
 import { escapeRegex, type Pagination } from '../../utils/pagination';
 import { describeMoneyMinor } from '../../utils/money';
 import { fromThousandths } from '../../utils/quantity';
+import { withTransaction } from '../../db/transaction';
+import { assertCatalogRecordDeletable, deleteStockLedgerFor } from './catalogReferences';
 import { resolveCategoryId } from './categoryService';
 import { recordOpeningStock, type StockActor } from './stockService';
 
@@ -322,6 +324,53 @@ export async function setItemArchived(input: {
   });
 
   return item;
+}
+
+/**
+ * Permanently removes an item, its stock ledger and its image.
+ *
+ * Unlike archiving, this cannot be undone, so it is refused outright while any order or
+ * purchase still refers to the item. The document and its ledger go in one transaction:
+ * a half-deleted item whose movements survive would leave the stock history pointing at
+ * a subject that no longer exists. The image file is unlinked only after the database
+ * work has committed, because a deleted file cannot be rolled back.
+ */
+export async function deleteItem(input: {
+  merchantId: Types.ObjectId;
+  itemId: string;
+  actor: StockActor;
+  req?: Request;
+}): Promise<{ name: string; movementsDeleted: number }> {
+  const item = await loadItem(input.merchantId, input.itemId);
+  await assertCatalogRecordDeletable(input.merchantId, 'item', item._id);
+
+  const name = item.name;
+  const imageUrl = item.imageUrl ?? null;
+  const quantityThousandths = item.quantityThousandths;
+  const unit = item.unit;
+
+  const movementsDeleted = await withTransaction(async (session) => {
+    const removed = await deleteStockLedgerFor(input.merchantId, 'item', item._id, session);
+    await Item.deleteOne({ _id: item._id, merchantId: input.merchantId }, session ? { session } : {});
+    return removed;
+  });
+
+  await deleteStoredFile(imageUrl);
+
+  await writeAudit({
+    actorType: input.actor.type,
+    actorId: input.actor.id ?? null,
+    actorLabel: input.actor.label,
+    action: 'item.deleted',
+    targetType: 'item',
+    targetId: item._id,
+    summary:
+      `Item "${name}" permanently deleted with ${fromThousandths(quantityThousandths)} ${unit} in stock ` +
+      `and ${movementsDeleted} stock movement${movementsDeleted === 1 ? '' : 's'} removed.`,
+    req: input.req,
+  });
+
+  return { name, movementsDeleted };
 }
 
 export async function replaceItemImage(input: {
