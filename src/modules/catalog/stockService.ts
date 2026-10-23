@@ -137,14 +137,14 @@ export async function applyStockMovementInSession(
   }
 
   const balanceAfter = subject.quantityThousandths + input.deltaThousandths;
-  if (balanceAfter < 0) {
-    throw new AppError(
-      409,
-      ErrorCode.CONFLICT,
-      `There is not enough stock. Available: ${describeQuantity(subject.quantityThousandths)} ${subject.unit}.`,
-      { meta: { available: fromThousandths(subject.quantityThousandths), unit: subject.unit } },
-    );
-  }
+  // if (balanceAfter < 0) {
+  //   throw new AppError(
+  //     409,
+  //     ErrorCode.CONFLICT,
+  //     `There is not enough stock. Available: ${describeQuantity(subject.quantityThousandths)} ${subject.unit}.`,
+  //     { meta: { available: fromThousandths(subject.quantityThousandths), unit: subject.unit } },
+  //   );
+  // }
 
   subject.quantityThousandths = balanceAfter;
   if (RECEIVING_TYPES.has(input.type) && input.deltaThousandths > 0) {
