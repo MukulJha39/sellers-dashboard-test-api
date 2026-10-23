@@ -135,7 +135,7 @@ describe('stock adjustments', () => {
     expect(response.status).toBe(422);
   });
 
-  it('refuses to take stock below zero, and says what is available', async () => {
+  it('lets stock be taken below zero', async () => {
     const merchant = await registerMerchant();
     const item = await createItem(merchant.accessToken, { openingQuantity: 3 });
 
@@ -144,13 +144,9 @@ describe('stock adjustments', () => {
       reason: 'lost',
     });
 
-    expect(response.status).toBe(409);
-    expect(response.body.error.message).toMatch(/not enough stock/i);
-    expect(response.body.error.meta).toMatchObject({ available: 3, unit: 'piece' });
-
-    // The failed attempt left no trace on the record or the ledger.
-    expect((await Item.findById(item.id))?.quantityThousandths).toBe(3000);
-    expect(await StockMovement.countDocuments({ subjectId: item.id })).toBe(1);
+    expect(response.status).toBe(200);
+    expect((await Item.findById(item.id))?.quantityThousandths).toBe(-2000);
+    expect(await StockMovement.countDocuments({ subjectId: item.id })).toBe(2);
   });
 
   it('keeps the ledger and the cached quantity in step across many movements', async () => {

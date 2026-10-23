@@ -7,7 +7,7 @@ import { RawMaterial, type RawMaterialDocument } from '../../models/RawMaterial'
 import { StockMovement, type StockMovementDocument } from '../../models/StockMovement';
 import { computeIsLowStock } from '../../models/stockFields';
 import { writeAudit } from '../../services/auditService';
-import { AppError, ErrorCode } from '../../utils/AppError';
+import { AppError } from '../../utils/AppError';
 import { describeQuantity, fromThousandths } from '../../utils/quantity';
 
 /** Who is making the change, for the ledger and the audit trail. */
@@ -137,15 +137,8 @@ export async function applyStockMovementInSession(
   }
 
   const balanceAfter = subject.quantityThousandths + input.deltaThousandths;
-  // if (balanceAfter < 0) {
-  //   throw new AppError(
-  //     409,
-  //     ErrorCode.CONFLICT,
-  //     `There is not enough stock. Available: ${describeQuantity(subject.quantityThousandths)} ${subject.unit}.`,
-  //     { meta: { available: fromThousandths(subject.quantityThousandths), unit: subject.unit } },
-  //   );
-  // }
-
+  // Stock is allowed to go negative: an order is placed whether or not there is enough
+  // on hand, and the negative balance shows the merchant what is owed to restock.
   subject.quantityThousandths = balanceAfter;
   if (RECEIVING_TYPES.has(input.type) && input.deltaThousandths > 0) {
     subject.totalReceivedThousandths += input.deltaThousandths;

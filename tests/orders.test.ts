@@ -132,7 +132,7 @@ describe('order creation', () => {
     expect(order.customerName).toBeNull();
   });
 
-  it('refuses to sell more than there is in stock, and says how much there is', async () => {
+  it('sells more than there is in stock, taking the item below zero', async () => {
     const { token, item, customer } = await fixture({ stock: 5 });
 
     const response = await request(app())
@@ -143,15 +143,10 @@ describe('order creation', () => {
         lines: [{ lineType: 'item', subjectId: item.id, quantity: 9 }],
       });
 
-    expect(response.status).toBe(409);
-    expect(response.body.error.meta.available).toBe(5);
-    // Nothing is left behind: no order, and the stock is untouched.
-    expect((await readItem(token, item.id)).quantity).toBe(5);
-
-    const list = await request(app())
-      .get(`${API}/orders`)
-      .set(...auth(token));
-    expect(list.body.data.items).toHaveLength(0);
+    expect(response.status).toBe(201);
+    const after = await readItem(token, item.id);
+    expect(after.quantity).toBe(-4);
+    expect(after.isOutOfStock).toBe(true);
   });
 
   it('refuses the same record twice on one order', async () => {
@@ -600,7 +595,7 @@ describe('order listing', () => {
 });
 
 describe('stock and orders together', () => {
-  it('lets an order be sold right down to zero but no further', async () => {
+  it('keeps selling an item once it has run out of stock', async () => {
     const { token, item, customer } = await fixture({ stock: 5 });
 
     await createOrder(token, {
@@ -619,7 +614,8 @@ describe('stock and orders together', () => {
         customerId: customer.id,
         lines: [{ lineType: 'item', subjectId: item.id, quantity: 1 }],
       });
-    expect(response.status).toBe(409);
+    expect(response.status).toBe(201);
+    expect((await readItem(token, item.id)).quantity).toBe(-1);
   });
 
   it('leaves an untracked item alone, and still sells it', async () => {
