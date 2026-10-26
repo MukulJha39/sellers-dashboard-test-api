@@ -14,7 +14,7 @@ import {
   toThousandths,
 } from '../src/utils/quantity';
 import { computeIsLowStock } from '../src/models/stockFields';
-import { isWholeNumberUnit } from '../src/config/catalog';
+import { DEFAULT_UNITS } from '../src/config/catalog';
 
 describe('money is held in whole minor units', () => {
   it('accepts whole amounts and rejects fractions', () => {
@@ -119,12 +119,13 @@ describe('quantities are held in thousandths', () => {
 });
 
 describe('units', () => {
-  it('knows which units only make sense as whole numbers', () => {
-    expect(isWholeNumberUnit('piece')).toBe(true);
-    expect(isWholeNumberUnit('bottle')).toBe(true);
-    expect(isWholeNumberUnit('kilogram')).toBe(false);
-    expect(isWholeNumberUnit('litre')).toBe(false);
-    expect(isWholeNumberUnit('unknown')).toBe(false);
+  it('starts with defaults that know which units only make sense as whole numbers', () => {
+    const whole = (code: string) => DEFAULT_UNITS.find((unit) => unit.code === code)?.wholeNumbersOnly;
+    expect(whole('piece')).toBe(true);
+    expect(whole('bottle')).toBe(true);
+    expect(whole('kilogram')).toBe(false);
+    expect(whole('litre')).toBe(false);
+    expect(new Set(DEFAULT_UNITS.map((unit) => unit.code)).size).toBe(DEFAULT_UNITS.length);
   });
 });
 

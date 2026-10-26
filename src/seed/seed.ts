@@ -26,6 +26,7 @@ import { createPurchase } from '../modules/purchases/purchaseService';
 import { createCustomer } from '../modules/relationships/customerService';
 import { createSupplier } from '../modules/relationships/supplierService';
 import { toThousandths } from '../utils/quantity';
+import { upgradeUnitPresentation, ensureDefaultUnits } from '../modules/catalog/unitService';
 import { Role } from '../models/Role';
 import { logger } from '../utils/logger';
 import { normalizePhone } from '../utils/phone';
@@ -667,6 +668,8 @@ export async function seedDemoOrders(): Promise<number> {
 
 
 export async function runSeed(): Promise<SeedSummary> {
+  await ensureDefaultUnits();
+  await upgradeUnitPresentation();
   const roles = await seedRoles();
   const adminsCreated = await seedAdmins();
   const merchantsCreated = await seedDemoMerchants();

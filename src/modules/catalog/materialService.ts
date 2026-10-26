@@ -11,7 +11,7 @@ import { fromThousandths } from '../../utils/quantity';
 import { withTransaction } from '../../db/transaction';
 import { assertCatalogRecordDeletable, deleteStockLedgerFor } from './catalogReferences';
 import { resolveCategoryId } from './categoryService';
-import { assertQuantityFitsUnit } from './itemService';
+import { assertQuantityFitsUnit, resolveUnitChoice } from './unitService';
 import { recordOpeningStock, type StockActor } from './stockService';
 
 export const MATERIAL_SORT_FIELDS = [
@@ -104,9 +104,10 @@ export async function createMaterial(input: {
   const threshold = input.data.lowStockThresholdThousandths ?? 0;
   const trackStock = input.data.trackStock ?? true;
 
-  assertQuantityFitsUnit(unit, threshold, 'lowStockThreshold');
+  const unitRecord = await resolveUnitChoice({ code: unit, kind: 'material' });
+  await assertQuantityFitsUnit(unitRecord, threshold, 'lowStockThreshold');
   if (input.openingQuantityThousandths) {
-    assertQuantityFitsUnit(unit, input.openingQuantityThousandths, 'quantity');
+    await assertQuantityFitsUnit(unitRecord, input.openingQuantityThousandths, 'quantity');
   }
 
   const categoryId = await resolveCategoryId(input.merchantId, 'material', input.data.categoryId);
@@ -192,14 +193,17 @@ export async function updateMaterial(input: {
     material.categoryId = await resolveCategoryId(input.merchantId, 'material', input.data.categoryId);
   }
 
-  if (input.data.unit !== undefined) material.unit = input.data.unit;
+  if (input.data.unit !== undefined) {
+    await resolveUnitChoice({ code: input.data.unit, kind: 'material', currentCode: material.unit });
+    material.unit = input.data.unit;
+  }
   if (input.data.lowStockThresholdThousandths !== undefined) {
     material.lowStockThresholdThousandths = input.data.lowStockThresholdThousandths;
   }
   if (input.data.trackStock !== undefined) material.trackStock = input.data.trackStock;
 
-  assertQuantityFitsUnit(material.unit, material.lowStockThresholdThousandths, 'lowStockThreshold');
-  assertQuantityFitsUnit(material.unit, material.quantityThousandths, 'unit');
+  await assertQuantityFitsUnit(material.unit, material.lowStockThresholdThousandths, 'lowStockThreshold');
+  await assertQuantityFitsUnit(material.unit, material.quantityThousandths, 'unit');
 
   material.isLowStock = computeIsLowStock({
     trackStock: material.trackStock,

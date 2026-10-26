@@ -9,7 +9,7 @@ import {
   STOCK_ADJUSTMENT_REASONS,
   STOCK_MOVEMENT_TYPES,
   STOCK_SUBJECT_TYPES,
-  UNITS,
+  UNIT_CODE_PATTERN,
 } from '../../config/catalog';
 import { AppError, ErrorCode } from '../../utils/AppError';
 import { MAX_MONEY_MINOR } from '../../utils/money';
@@ -152,7 +152,8 @@ const itemFieldRules = (optional: boolean): ValidationChain[] => [
   optionalTextField('description', 1000),
   optionalTextField('sku', 60),
   optionalTextField('barcode', 60),
-  body('unit').optional({ values: 'falsy' }).isIn(UNITS).withMessage('Choose a unit of measurement.'),
+  // The format only; whether the unit exists and is active is checked by the service.
+  body('unit').optional({ values: 'falsy' }).isString().matches(UNIT_CODE_PATTERN).withMessage('Choose a unit of measurement.'),
   body('trackStock').optional({ values: 'null' }).isBoolean().withMessage('Track stock must be true or false.').toBoolean(),
   moneyField('sellingPriceMinor'),
   moneyField('costPriceMinor'),
@@ -215,7 +216,8 @@ const materialFieldRules = (optional: boolean): ValidationChain[] => [
   nameField('name', { optional }),
   body('categoryId').optional({ values: 'null' }).isMongoId().withMessage('Choose a category from your list.'),
   optionalTextField('notes', 1000),
-  body('unit').optional({ values: 'falsy' }).isIn(UNITS).withMessage('Choose a unit of measurement.'),
+  // The format only; whether the unit exists and is active is checked by the service.
+  body('unit').optional({ values: 'falsy' }).isString().matches(UNIT_CODE_PATTERN).withMessage('Choose a unit of measurement.'),
   body('trackStock').optional({ values: 'null' }).isBoolean().toBoolean(),
   moneyField('purchaseCostMinor'),
   quantityField('lowStockThreshold'),

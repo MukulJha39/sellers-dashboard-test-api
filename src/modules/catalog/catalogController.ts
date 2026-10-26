@@ -6,8 +6,7 @@ import {
   CURRENCIES,
   DURATION_BILLING_UNITS,
   STOCK_ADJUSTMENT_REASONS,
-  UNITS,
-  WHOLE_NUMBER_UNITS,
+  UNIT_GROUPS,
   type BillingUnit,
   type CategoryKind,
   type StockAdjustmentReason,
@@ -15,6 +14,7 @@ import {
   type StockSubjectType,
   type Unit,
 } from '../../config/catalog';
+import { listUnits } from './unitService';
 import {
   CONTACT_CHANNELS,
   CONTACT_LANGUAGES,
@@ -143,7 +143,21 @@ function quantityFromBody(body: Record<string, unknown>, key: string): number | 
  */
 export async function getCatalogMeta(_req: Request, res: Response): Promise<void> {
   sendData(res, {
-    units: UNITS.map((unit) => ({ value: unit, wholeNumbersOnly: WHOLE_NUMBER_UNITS.has(unit) })),
+    // Admin-managed. `value` is the code records store; inactive units are listed with
+    // `isActive: false` so clients can still label records that use them, but should
+    // only offer active ones for a new choice.
+    units: (await listUnits({ includeInactive: true })).map((unit) => ({
+      value: unit.code,
+      name: unit.name,
+      symbol: unit.symbol,
+      icon: unit.icon ?? null,
+      group: unit.group ?? 'other',
+      wholeNumbersOnly: unit.wholeNumbersOnly,
+      appliesTo: [...unit.appliesTo],
+      isActive: unit.isActive,
+    })),
+    // The sections a unit picker is split into, in order, with their headings.
+    unitGroups: UNIT_GROUPS,
     billingUnits: BILLING_UNITS.map((unit) => ({
       value: unit,
       supportsDuration: DURATION_BILLING_UNITS.has(unit),

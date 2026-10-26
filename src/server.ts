@@ -3,6 +3,7 @@ import { createApp } from './app';
 import { assertProductionConfig, env } from './config/env';
 import { connectDatabase, disconnectDatabase, syncIndexes } from './db/connect';
 import { ensureUploadDir } from './services/storageService';
+import { upgradeUnitPresentation, ensureDefaultUnits } from './modules/catalog/unitService';
 import { logger } from './utils/logger';
 
 let server: Server | null = null;
@@ -40,6 +41,9 @@ async function start(): Promise<void> {
   await ensureUploadDir();
   await connectDatabase();
   await syncIndexes();
+  // A fresh database starts with the standard units; after that the admin panel owns them.
+  await ensureDefaultUnits();
+  await upgradeUnitPresentation();
 
   const app = createApp();
   server = app.listen(env.port, () => {

@@ -22,7 +22,7 @@ import { AppError } from '../../utils/AppError';
 import { describeMoneyMinor, requireMoneyMinor } from '../../utils/money';
 import { escapeRegex } from '../../utils/pagination';
 import { requireQuantityThousandths } from '../../utils/quantity';
-import { assertQuantityFitsUnit } from '../catalog/itemService';
+import { assertQuantityFitsUnit } from '../catalog/unitService';
 import {
   applyStockMovementInSession,
   auditStockMovement,
@@ -130,7 +130,7 @@ async function buildLines(
       const quantityThousandths = requireQuantityThousandths(raw.quantity, quantityField, {
         allowZero: false,
       });
-      assertQuantityFitsUnit(item.unit, quantityThousandths, quantityField);
+      await assertQuantityFitsUnit(item.unit, quantityThousandths, quantityField);
 
       const unitRateMinor =
         raw.unitRateMinor === undefined

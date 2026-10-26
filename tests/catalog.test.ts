@@ -27,8 +27,8 @@ describe('catalog vocabulary', () => {
 
     expect(units).toEqual(
       expect.arrayContaining([
-        { value: 'piece', wholeNumbersOnly: true },
-        { value: 'kilogram', wholeNumbersOnly: false },
+        expect.objectContaining({ value: 'piece', name: 'Piece', wholeNumbersOnly: true, isActive: true }),
+        expect.objectContaining({ value: 'kilogram', symbol: 'kg', wholeNumbersOnly: false }),
       ]),
     );
     expect(billingUnits).toEqual(

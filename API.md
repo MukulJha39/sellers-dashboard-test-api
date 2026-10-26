@@ -353,13 +353,37 @@ field to set and no endpoint to call, so selling a service can never move a quan
 
 ### `GET /api/v1/catalog/meta`
 
-The vocabulary the clients must not hard-code: units (each with `wholeNumbersOnly`),
+The vocabulary the clients must not hard-code: units (each with `value` — the code
+records store — plus `name`, `symbol`, `icon` (a Material Icons name such as `scale`, or `null`), `group`, `wholeNumbersOnly`, `appliesTo` and `isActive`),
 billing units, adjustment reasons, business categories, supported currencies, and from
 Phase 3 the payment methods, payment states and contact channels. The admin panel reads
 the same document at `GET /api/v1/admin/catalog/meta`.
 
 One document rather than several: it is fetched once at launch, and one place that can
 drift is better than four.
+
+Units are managed from the admin panel, so the list can change. Offer only units that
+are `isActive` and whose `appliesTo` includes `item` or `material` for a new choice;
+inactive ones are still listed so records that use them can be labelled. A record
+keeping the unit it already has is always accepted.
+
+To draw the unit picker, split the units by `group` in the order of `unitGroups`
+(each with the heading to show, for example "By weight"), sort each section by its
+order in `units`, and draw each unit's `icon` from Material Icons — `Icons.<icon>` in
+Flutter, `<MaterialIcons name={icon} />` in React Native — above its `symbol`.
+
+### Units of measurement (admin)
+
+| Method | Path | Permission | Notes |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/admin/units` | `item.view` | Every unit, active or not, with `usage` counts (items, materials, orders, purchases). |
+| `POST` | `/api/v1/admin/units` | `unit.manage` | Body: `code`, `name`, `symbol`, optional `icon` (a Material Icons name such as `water_drop`; `null` clears it), `group` (`weight`, `volume`, `count`, `length`, `other`), `wholeNumbersOnly`, `appliesTo` (`item`/`material`), `isActive`, `sortOrder`. |
+| `PATCH` | `/api/v1/admin/units/:id` | `unit.manage` | Any field except `code`, which is permanent because records store it. |
+| `DELETE` | `/api/v1/admin/units/:id` | `unit.manage` | Refused with `RECORD_IN_USE` while anything uses the unit — deactivate it instead. |
+
+A fresh database is given the 18 standard units automatically. Turning on
+`wholeNumbersOnly` is refused while a record holds a fractional quantity in that unit,
+and no change may leave items or raw materials without an active unit.
 
 ### `GET /api/v1/catalog/summary`
 

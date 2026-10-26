@@ -2,7 +2,7 @@ import { Schema, model, type Document, type Model, type Types } from 'mongoose';
 import type { PaymentStatus, PurchaseStatus } from '../config/commerce';
 import { PAYMENT_STATUSES, PURCHASE_STATUSES } from '../config/commerce';
 import type { StockSubjectType, Unit } from '../config/catalog';
-import { STOCK_SUBJECT_TYPES, UNITS } from '../config/catalog';
+import { STOCK_SUBJECT_TYPES } from '../config/catalog';
 import { catalogJsonTransform } from './stockFields';
 
 /**
@@ -64,7 +64,7 @@ const purchaseLineSchema = new Schema<PurchaseLine>(
     subjectType: { type: String, required: true, enum: STOCK_SUBJECT_TYPES },
     subjectId: { type: Schema.Types.ObjectId, required: true },
     name: { type: String, required: true, trim: true, maxlength: 120 },
-    unit: { type: String, required: true, enum: UNITS },
+    unit: { type: String, required: true, maxlength: 40 },
     quantityThousandths: { type: Number, required: true, min: 1 },
     unitCostMinor: { type: Number, required: true, min: 0 },
     lineTotalMinor: { type: Number, required: true, min: 0 },

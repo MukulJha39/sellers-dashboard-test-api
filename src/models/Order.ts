@@ -1,6 +1,6 @@
 import { Schema, model, type Document, type Model, type Types } from 'mongoose';
 import type { BillingUnit, Unit } from '../config/catalog';
-import { BILLING_UNITS, UNITS } from '../config/catalog';
+import { BILLING_UNITS } from '../config/catalog';
 import type { PaymentStatus } from '../config/commerce';
 import { PAYMENT_STATUSES } from '../config/commerce';
 import type {
@@ -125,7 +125,8 @@ const orderLineSchema = new Schema<OrderLine>(
     lineType: { type: String, required: true, enum: ORDER_LINE_TYPES },
     subjectId: { type: Schema.Types.ObjectId, required: true },
     name: { type: String, required: true, trim: true, maxlength: 120 },
-    unit: { type: String, default: null, enum: [...UNITS, null] },
+    // A snapshot of the unit code; units are admin-managed, so no fixed enum here.
+    unit: { type: String, default: null, maxlength: 40 },
     billingUnit: { type: String, default: null, enum: [...BILLING_UNITS, null] },
     quantityThousandths: { type: Number, required: true, min: 1 },
     unitRateMinor: { type: Number, required: true, min: 0 },

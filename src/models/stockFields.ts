@@ -1,5 +1,4 @@
 import { Schema } from 'mongoose';
-import { UNITS } from '../config/catalog';
 
 /**
  * The stock shape shared by items and raw materials.
@@ -10,7 +9,8 @@ import { UNITS } from '../config/catalog';
  * and the low-stock list has to stay fast as a catalog grows.
  */
 export const stockSchemaFields = {
-  unit: { type: String, required: true, enum: UNITS, default: 'piece' },
+  /** A MeasurementUnit code. Checked against the unit catalogue by the services. */
+  unit: { type: String, required: true, default: 'piece', maxlength: 40 },
 
   /** Whether this record's quantity is tracked at all. */
   trackStock: { type: Boolean, required: true, default: true },

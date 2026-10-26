@@ -1,7 +1,6 @@
 import type { Request } from 'express';
 import { Types } from 'mongoose';
 import type { Unit } from '../../config/catalog';
-import { isWholeNumberUnit } from '../../config/catalog';
 import { Item, type ItemDocument } from '../../models/Item';
 import { computeIsLowStock } from '../../models/stockFields';
 import { diffFields, writeAudit } from '../../services/auditService';
@@ -14,6 +13,10 @@ import { withTransaction } from '../../db/transaction';
 import { assertCatalogRecordDeletable, deleteStockLedgerFor } from './catalogReferences';
 import { resolveCategoryId } from './categoryService';
 import { recordOpeningStock, type StockActor } from './stockService';
+import { assertQuantityFitsUnit, resolveUnitChoice } from './unitService';
+
+// Re-exported for the callers that already import it from here.
+export { assertQuantityFitsUnit };
 
 export const ITEM_SORT_FIELDS = [
   'name',
@@ -44,19 +47,6 @@ export interface ItemInput {
   lowStockThresholdThousandths?: number;
   taxRatePercent?: number | null;
   imageUrl?: string | null;
-}
-
-/** Whole-number units cannot hold a fractional quantity or threshold. */
-export function assertQuantityFitsUnit(
-  unit: string,
-  thousandths: number,
-  field: string,
-): void {
-  if (isWholeNumberUnit(unit) && thousandths % 1000 !== 0) {
-    throw AppError.validation('Please correct the highlighted fields.', [
-      { field, message: `A quantity in ${unit} must be a whole number.` },
-    ]);
-  }
 }
 
 export async function listItems(
@@ -137,9 +127,10 @@ export async function createItem(input: {
   const threshold = input.data.lowStockThresholdThousandths ?? 0;
   const trackStock = input.data.trackStock ?? true;
 
-  assertQuantityFitsUnit(unit, threshold, 'lowStockThreshold');
+  const unitRecord = await resolveUnitChoice({ code: unit, kind: 'item' });
+  await assertQuantityFitsUnit(unitRecord, threshold, 'lowStockThreshold');
   if (input.openingQuantityThousandths) {
-    assertQuantityFitsUnit(unit, input.openingQuantityThousandths, 'quantity');
+    await assertQuantityFitsUnit(unitRecord, input.openingQuantityThousandths, 'quantity');
   }
 
   const sku = input.data.sku?.trim() || null;
@@ -237,7 +228,10 @@ export async function updateItem(input: {
     item.categoryId = await resolveCategoryId(input.merchantId, 'item', input.data.categoryId);
   }
 
-  if (input.data.unit !== undefined) item.unit = input.data.unit;
+  if (input.data.unit !== undefined) {
+    await resolveUnitChoice({ code: input.data.unit, kind: 'item', currentCode: item.unit });
+    item.unit = input.data.unit;
+  }
   if (input.data.lowStockThresholdThousandths !== undefined) {
     item.lowStockThresholdThousandths = input.data.lowStockThresholdThousandths;
   }
@@ -246,8 +240,8 @@ export async function updateItem(input: {
   // it on starts from whatever the ledger already says.
   if (input.data.trackStock !== undefined) item.trackStock = input.data.trackStock;
 
-  assertQuantityFitsUnit(item.unit, item.lowStockThresholdThousandths, 'lowStockThreshold');
-  assertQuantityFitsUnit(item.unit, item.quantityThousandths, 'unit');
+  await assertQuantityFitsUnit(item.unit, item.lowStockThresholdThousandths, 'lowStockThreshold');
+  await assertQuantityFitsUnit(item.unit, item.quantityThousandths, 'unit');
 
   item.isLowStock = computeIsLowStock({
     trackStock: item.trackStock,

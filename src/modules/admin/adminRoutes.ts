@@ -18,6 +18,8 @@ import {
   postAdminRefresh,
 } from './adminController';
 import { getCatalogMeta } from '../catalog/catalogController';
+import { deleteAdminUnit, getAdminUnits, patchAdminUnit, postAdminUnit } from './adminUnitController';
+import { unitCreateRules, unitIdRules, unitUpdateRules } from './adminUnitValidators';
 import {
   deleteRoleById,
   getAdminById,
@@ -267,6 +269,33 @@ adminRouter.get(
  * reasons. Served here too so the admin panel never hard-codes a second copy.
  */
 adminRouter.get('/catalog/meta', asyncHandler(getCatalogMeta));
+
+/*
+ * Units of measurement. Reading them needs only catalog read access, since every
+ * catalog screen labels quantities with them; changing them needs `unit.manage`.
+ */
+adminRouter.get('/units', requirePermission(PERMISSIONS.ITEM_VIEW), asyncHandler(getAdminUnits));
+
+adminRouter.post(
+  '/units',
+  requirePermission(PERMISSIONS.UNIT_MANAGE),
+  ...validate(unitCreateRules),
+  asyncHandler(postAdminUnit),
+);
+
+adminRouter.patch(
+  '/units/:id',
+  requirePermission(PERMISSIONS.UNIT_MANAGE),
+  ...validate(unitUpdateRules),
+  asyncHandler(patchAdminUnit),
+);
+
+adminRouter.delete(
+  '/units/:id',
+  requirePermission(PERMISSIONS.UNIT_MANAGE),
+  ...validate(unitIdRules),
+  asyncHandler(deleteAdminUnit),
+);
 
 adminRouter.get(
   '/merchants/:merchantId/business',

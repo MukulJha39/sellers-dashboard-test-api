@@ -9,7 +9,7 @@ import { AppError } from '../../utils/AppError';
 import { describeMoneyMinor, multiplyMoneyByQuantity, requireMoneyMinor } from '../../utils/money';
 import { escapeRegex } from '../../utils/pagination';
 import { describeQuantity, requireQuantityThousandths } from '../../utils/quantity';
-import { assertQuantityFitsUnit } from '../catalog/itemService';
+import { assertQuantityFitsUnit } from '../catalog/unitService';
 import {
   applyStockMovementInSession,
   auditStockMovement,
@@ -107,7 +107,7 @@ async function buildLines(
       allowZero: false,
     });
     // Pieces are counted, not measured: buying 2.5 of them is not a thing.
-    assertQuantityFitsUnit(subject.unit, quantityThousandths, quantityField);
+    await assertQuantityFitsUnit(subject.unit, quantityThousandths, quantityField);
 
     const unitCostMinor = requireMoneyMinor(raw.unitCostMinor, `lines[${index}].unitCostMinor`);
     const lineTotalMinor = multiplyMoneyByQuantity(unitCostMinor, quantityThousandths);
