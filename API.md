@@ -98,6 +98,7 @@ list of which units are countable.
 | `PASSWORD_CHANGE_REQUIRED` | 403 | Admin still holds a password set for them; only `/admin/auth/me`, `/admin/auth/logout` and `/admin/auth/change-password` work |
 | `NOT_FOUND` | 404 | No such record or endpoint |
 | `CONFLICT` | 409 | Duplicate or conflicting state |
+| `RECORD_IN_USE` | 409 | A record cannot be deleted while other records refer to it (`meta` carries the counts) |
 | `PHONE_IMMUTABLE` | 409 | An attempt was made to change a verified phone number |
 | `ALREADY_REGISTERED` | 409 | That phone number already has a merchant |
 | `OTP_INVALID` | 400 | Wrong code (`meta.attemptsRemaining`) |
@@ -109,11 +110,10 @@ list of which units are countable.
 | `UPLOAD_REJECTED` | 400 | File missing, too large, or not a real image |
 | `INTERNAL_ERROR` | 500 | Unexpected failure; `requestId` identifies it in the logs |
 
-`CONFLICT` covers three Phase 2 cases, each with the detail a client needs:
+`CONFLICT` covers two Phase 2 cases:
 
 | Situation | `meta` |
 |---|---|
-| A stock change would leave a negative balance | `available`, `unit` |
 | A quantity field was sent to a details endpoint | — |
 | A duplicate name or SKU within one merchant | — |
 
@@ -139,6 +139,197 @@ Merchant and admin tokens are separate audiences — a merchant token is rejecte
 ```
 
 Refresh tokens rotate. Presenting a previously used refresh token revokes the whole session, because that only happens if a token was captured.
+
+---
+
+## Route index
+
+Every route the API serves. Paths are relative to `/api/v1` unless they start with `/`
+outside it (the operational endpoints). **Auth** is `—` (public), `merchant` (merchant
+access token), `admin` (admin access token, any role) or an admin permission. The
+sections after this table describe each route in detail.
+
+Admin routes other than `/admin/auth/*` additionally return `PASSWORD_CHANGE_REQUIRED`
+while the account holds a password set by somebody else (see
+[Passwords set by somebody else](#passwords-set-by-somebody-else)).
+
+### Operational
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| `GET` | `/health` | — | Liveness |
+| `GET` | `/ready` | — | Readiness; `503` when the database is down |
+| `GET` | `/uploads/*` | — | Stored media (photos, logos, catalog images) |
+
+### Merchant app
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| `POST` | `/auth/otp/request` | — | Send a sign-in code |
+| `POST` | `/auth/otp/verify` | — | Verify the code; sign in or start registration |
+| `POST` | `/auth/register` | registration token | Create the merchant (multipart `photo` optional) |
+| `POST` | `/auth/refresh` | — | Rotate tokens |
+| `POST` | `/auth/logout` | merchant | Revoke the current session |
+| `GET` | `/merchants/me` | merchant | Own profile |
+| `PATCH` | `/merchants/me` | merchant | Edit own profile |
+| `PUT` | `/merchants/me/photo` | merchant | Upload photo (multipart `photo`) |
+| `DELETE` | `/merchants/me/photo` | merchant | Remove photo |
+| `GET` | `/business` | merchant | Business profile (created empty on first read) |
+| `PATCH` | `/business` | merchant | Edit business profile and preferences |
+| `PUT` | `/business/logo` | merchant | Upload logo (multipart `logo`) |
+| `DELETE` | `/business/logo` | merchant | Remove logo |
+| `GET` | `/catalog/meta` | merchant | Units, reasons, methods, statuses and other vocabulary |
+| `GET` | `/catalog/summary` | merchant | Catalog counts for the dashboard |
+| `GET` | `/catalog/low-stock` | merchant | Records at or below threshold |
+| `GET` | `/categories` | merchant | List categories |
+| `POST` | `/categories` | merchant | Create a category |
+| `PATCH` | `/categories/:id` | merchant | Rename a category |
+| `POST` | `/categories/:id/archive` | merchant | Archive a category |
+| `POST` | `/categories/:id/restore` | merchant | Restore a category |
+| `GET` | `/items` | merchant | List items |
+| `POST` | `/items` | merchant | Create an item |
+| `GET` | `/items/:id` | merchant | One item |
+| `PATCH` | `/items/:id` | merchant | Edit an item (no quantity fields) |
+| `POST` | `/items/:id/archive` | merchant | Archive an item |
+| `POST` | `/items/:id/restore` | merchant | Restore an item |
+| `PUT` | `/items/:id/image` | merchant | Upload image (multipart `image`) |
+| `DELETE` | `/items/:id/image` | merchant | Remove image |
+| `DELETE` | `/items/:id` | merchant | Delete permanently |
+| `GET` | `/services` | merchant | List services |
+| `POST` | `/services` | merchant | Create a service |
+| `GET` | `/services/:id` | merchant | One service |
+| `PATCH` | `/services/:id` | merchant | Edit a service |
+| `POST` | `/services/:id/archive` | merchant | Archive a service |
+| `POST` | `/services/:id/restore` | merchant | Restore a service |
+| `PUT` | `/services/:id/image` | merchant | Upload image (multipart `image`) |
+| `DELETE` | `/services/:id/image` | merchant | Remove image |
+| `DELETE` | `/services/:id` | merchant | Delete permanently |
+| `GET` | `/materials` | merchant | List raw materials |
+| `POST` | `/materials` | merchant | Create a raw material |
+| `GET` | `/materials/:id` | merchant | One raw material |
+| `PATCH` | `/materials/:id` | merchant | Edit a raw material (no quantity fields) |
+| `POST` | `/materials/:id/archive` | merchant | Archive a raw material |
+| `POST` | `/materials/:id/restore` | merchant | Restore a raw material |
+| `PUT` | `/materials/:id/image` | merchant | Upload image (multipart `image`) |
+| `DELETE` | `/materials/:id/image` | merchant | Remove image |
+| `DELETE` | `/materials/:id` | merchant | Delete permanently |
+| `GET` | `/stock/history` | merchant | Stock ledger |
+| `POST` | `/stock/:subjectType/:subjectId/adjust` | merchant | Signed stock change |
+| `PUT` | `/stock/:subjectType/:subjectId/quantity` | merchant | Set an exact quantity (recount) |
+| `GET` | `/customers` | merchant | List customers |
+| `POST` | `/customers` | merchant | Create a customer |
+| `GET` | `/customers/tags` | merchant | Distinct customer tags |
+| `GET` | `/customers/:id` | merchant | One customer |
+| `PATCH` | `/customers/:id` | merchant | Edit a customer |
+| `POST` | `/customers/:id/archive` | merchant | Archive a customer |
+| `POST` | `/customers/:id/restore` | merchant | Restore a customer |
+| `GET` | `/suppliers` | merchant | List suppliers |
+| `POST` | `/suppliers` | merchant | Create a supplier |
+| `GET` | `/suppliers/:id` | merchant | One supplier |
+| `PATCH` | `/suppliers/:id` | merchant | Edit a supplier |
+| `POST` | `/suppliers/:id/archive` | merchant | Archive a supplier |
+| `POST` | `/suppliers/:id/restore` | merchant | Restore a supplier |
+| `GET` | `/purchases` | merchant | List purchases |
+| `POST` | `/purchases` | merchant | Record a purchase |
+| `GET` | `/purchases/summary` | merchant | Buying figures for the dashboard |
+| `GET` | `/purchases/:id` | merchant | One purchase with its payments |
+| `PATCH` | `/purchases/:id` | merchant | Edit dates and notes |
+| `POST` | `/purchases/:id/receive` | merchant | Take the goods into stock |
+| `POST` | `/purchases/:id/cancel` | merchant | Cancel a purchase |
+| `POST` | `/purchases/:id/payments` | merchant | Pay a supplier |
+| `GET` | `/payments` | merchant | List payment entries |
+| `PATCH` | `/payments/:id` | merchant | Correct reference, date or notes |
+| `GET` | `/orders` | merchant | List orders |
+| `POST` | `/orders` | merchant | Create an order |
+| `GET` | `/orders/:id` | merchant | One order with payments and allowed transitions |
+| `PATCH` | `/orders/:id` | merchant | Edit an order (lines only while draft) |
+| `GET` | `/orders/:id/activity` | merchant | Order timeline |
+| `POST` | `/orders/:id/status` | merchant | Move an order through its lifecycle |
+| `POST` | `/orders/:id/payments` | merchant | Take a customer payment |
+| `PUT` | `/orders/:id/installments` | merchant | Set an instalment plan |
+| `POST` | `/orders/:id/installments/even` | merchant | Generate an even instalment plan |
+| `GET` | `/receivables` | merchant | Money owed, grouped by customer |
+| `GET` | `/receivables/installments` | merchant | Unpaid instalments, soonest first |
+| `GET` | `/dashboard` | merchant | Home-screen figures |
+
+### Admin panel
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| `POST` | `/admin/auth/login` | — | Sign in |
+| `POST` | `/admin/auth/refresh` | — | Rotate tokens |
+| `GET` | `/admin/auth/me` | admin | Own account and permissions |
+| `PATCH` | `/admin/auth/me` | admin | Change own display name |
+| `POST` | `/admin/auth/logout` | admin | Revoke the current session |
+| `POST` | `/admin/auth/change-password` | admin | Change own password |
+| `GET` | `/admin/catalog/meta` | admin | Same vocabulary as the app |
+| `GET` | `/admin/merchants` | `merchant.view` | List merchants |
+| `GET` | `/admin/merchants/:id` | `merchant.view` | One merchant |
+| `PATCH` | `/admin/merchants/:id` | `merchant.edit` | Edit a merchant |
+| `PATCH` | `/admin/merchants/:id/status` | `merchant.suspend` | Suspend or reactivate |
+| `GET` | `/admin/merchants/:merchantId/business` | `business.view` | A merchant's business profile |
+| `PATCH` | `/admin/merchants/:merchantId/business` | `business.edit` | Edit a merchant's business profile |
+| `GET` | `/admin/merchants/:merchantId/catalog-summary` | `merchant.view` | A merchant's catalog counts |
+| `GET` | `/admin/merchants/:merchantId/categories` | `item.view` | A merchant's categories |
+| `GET` | `/admin/merchants/:merchantId/relationship-summary` | `merchant.view` | A merchant's customer/supplier/purchase figures |
+| `GET` | `/admin/merchants/:merchantId/order-summary` | `order.view` | A merchant's order figures |
+| `GET` | `/admin/roles` | `role.view` | Roles with member counts |
+| `POST` | `/admin/roles` | `role.manage` | Create a role |
+| `PATCH` | `/admin/roles/:id` | `role.manage` | Edit a role |
+| `DELETE` | `/admin/roles/:id` | `role.manage` | Delete a role |
+| `GET` | `/admin/admins` | `admin.view` | List admins |
+| `GET` | `/admin/admins/:id` | `admin.view` | One admin |
+| `POST` | `/admin/admins` | `admin.manage` | Create an admin |
+| `PATCH` | `/admin/admins/:id` | `admin.manage` | Edit an admin |
+| `PATCH` | `/admin/admins/:id/status` | `admin.manage` | Suspend or reactivate an admin |
+| `POST` | `/admin/admins/:id/reset-password` | `admin.manage` | Set a temporary password |
+| `GET` | `/admin/audit-logs` | `audit.view` | Audit trail |
+| `GET` | `/admin/units` | `item.view` | Units with usage counts |
+| `POST` | `/admin/units` | `unit.manage` | Create a unit |
+| `PATCH` | `/admin/units/:id` | `unit.manage` | Edit a unit |
+| `DELETE` | `/admin/units/:id` | `unit.manage` | Delete an unused unit |
+| `GET` | `/admin/items` | `item.view` | Items across merchants |
+| `PATCH` | `/admin/items/:id` | `item.manage` | Edit an item |
+| `POST` | `/admin/items/:id/archive` | `item.manage` | Archive an item |
+| `POST` | `/admin/items/:id/restore` | `item.manage` | Restore an item |
+| `DELETE` | `/admin/items/:id` | `item.delete` | Delete an item permanently |
+| `GET` | `/admin/services` | `service.view` | Services across merchants |
+| `PATCH` | `/admin/services/:id` | `service.manage` | Edit a service |
+| `POST` | `/admin/services/:id/archive` | `service.manage` | Archive a service |
+| `POST` | `/admin/services/:id/restore` | `service.manage` | Restore a service |
+| `DELETE` | `/admin/services/:id` | `service.delete` | Delete a service permanently |
+| `GET` | `/admin/materials` | `material.view` | Raw materials across merchants |
+| `PATCH` | `/admin/materials/:id` | `material.manage` | Edit a raw material |
+| `POST` | `/admin/materials/:id/archive` | `material.manage` | Archive a raw material |
+| `POST` | `/admin/materials/:id/restore` | `material.manage` | Restore a raw material |
+| `DELETE` | `/admin/materials/:id` | `material.delete` | Delete a raw material permanently |
+| `GET` | `/admin/stock-movements` | `stock.view` | Stock ledger across merchants |
+| `GET` | `/admin/low-stock` | `stock.view` | Low-stock records across merchants |
+| `POST` | `/admin/stock/:subjectType/:subjectId/adjust` | `stock.adjust` | Adjust stock on a merchant's behalf |
+| `GET` | `/admin/customers` | `customer.view` | Customers across merchants |
+| `GET` | `/admin/customers/:id` | `customer.view` | One customer |
+| `PATCH` | `/admin/customers/:id` | `customer.edit` | Edit a customer |
+| `POST` | `/admin/customers/:id/archive` | `customer.archive` | Archive a customer |
+| `POST` | `/admin/customers/:id/restore` | `customer.archive` | Restore a customer |
+| `GET` | `/admin/suppliers` | `supplier.view` | Suppliers across merchants |
+| `GET` | `/admin/suppliers/:id` | `supplier.view` | One supplier |
+| `PATCH` | `/admin/suppliers/:id` | `supplier.manage` | Edit a supplier |
+| `POST` | `/admin/suppliers/:id/archive` | `supplier.manage` | Archive a supplier |
+| `POST` | `/admin/suppliers/:id/restore` | `supplier.manage` | Restore a supplier |
+| `GET` | `/admin/purchases` | `purchase.view` | Purchases across merchants |
+| `GET` | `/admin/purchases/:id` | `purchase.view` | One purchase |
+| `POST` | `/admin/purchases/:id/cancel` | `purchase.manage` | Cancel a purchase |
+| `POST` | `/admin/purchases/:id/payments` | `payment.manage` | Record a supplier payment |
+| `GET` | `/admin/payments` | `payment.view` | Payment entries across merchants |
+| `PATCH` | `/admin/payments/:id` | `payment.manage` | Correct reference, date or notes |
+| `GET` | `/admin/orders` | `order.view` | Orders across merchants |
+| `GET` | `/admin/orders/:id` | `order.view` | One order |
+| `POST` | `/admin/orders/:id/status` | `order.edit` | Move an order on (not to `cancelled`) |
+| `POST` | `/admin/orders/:id/cancel` | `order.cancel` | Cancel an order |
+| `POST` | `/admin/orders/:id/payments` | `payment.manage` | Record a customer payment |
+| `PUT` | `/admin/orders/:id/installments` | `installment.manage` | Set an instalment plan |
+| `GET` | `/admin/installments` | `installment.view` | Instalments across merchants |
+| `GET` | `/admin/receivables` | `payment.view` | Receivables rolled up per merchant |
 
 ---
 
@@ -506,12 +697,12 @@ interpret is not worth keeping — and comes from `catalog/meta`: `damaged`, `lo
 `expired`, `found`, `manual_correction`, `recount`, `other`. `opening_stock` is written
 by the server when a record is created and cannot be chosen by hand.
 
-`201` `{ "data": { "movement": StockMovementView } }`
+`200` `{ "data": { "movement": StockMovementView } }`
 
-A change that would leave a negative balance is `409 CONFLICT` with
-`meta: { available, unit }`, and **nothing is written** — not the movement, not the
-quantity. Negative stock is not a state a shop can be in, so it is not a state the
-database is allowed to hold.
+**Stock may go below zero.** A change larger than what is on hand is accepted, and the
+quantity becomes negative. The negative figure is what the merchant has sold or written
+off without stock to cover it, which they then restock against. A negative record
+reports `isOutOfStock: true` and `isLowStock: true`.
 
 ### `PUT /api/v1/stock/:subjectType/:subjectId/quantity`
 
@@ -678,6 +869,10 @@ stuck. Two different merchants may each have a customer on the same number.
 Tags are trimmed and de-duplicated case-insensitively, so `VIP` and `vip ` do not both
 exist.
 
+### `GET /api/v1/customers/:id`
+
+`200` `{ "data": { "customer": CustomerView } }`. Another merchant's customer is `404`.
+
 ### `PATCH /api/v1/customers/:id`
 
 Every field editable, `null` clears an optional one.
@@ -832,11 +1027,11 @@ Two rules, both chosen so the outcome is predictable rather than convenient:
 - **A purchase with payments against it cannot be cancelled** (`409`, with `meta.paid`).
   Cancelling would strand the money with nothing to belong to. Supplier returns and
   refunds are the right instrument and arrive in Phase 5.
-- **If the received goods have since been sold, the reversal is refused** (`409`, with
-  `meta: { available, unit }`) rather than clamping stock to zero and leaving a quantity
-  the ledger cannot explain.
+- **If the received goods have since been sold, the reversal still goes through** and
+  the stock goes negative by the amount already sold, rather than being clamped to zero
+  and leaving a quantity the ledger cannot explain.
 
-Otherwise the stock comes back as `reversal` movements — the receipt and its undoing are
+The stock comes back as `reversal` movements — the receipt and its undoing are
 both on the record, because a ledger you can delete from is not a ledger.
 
 ### `GET /api/v1/purchases/:id`
@@ -994,9 +1189,9 @@ silently capped.
 to have happened next to stock that never moved is the discrepancy a merchant cannot
 diagnose and the ledger cannot explain.
 
-**Selling more than there is in stock is `409`** with `meta: { available, unit }`; nothing
-is left behind. Services never touch stock, and an item with `trackStock: false` is skipped
-rather than refused.
+**An order is accepted whether or not there is enough stock.** Selling more than is on
+hand takes the item's quantity below zero (see the stock adjust endpoint). Services never
+touch stock, and an item with `trackStock: false` is skipped.
 
 The same record twice on one order is `422` — change its quantity instead.
 
@@ -1603,11 +1798,12 @@ the audit entry names them.
 
 ## Permissions in use
 
-**Phase 1** — `merchant.view`, `merchant.edit`, `merchant.suspend`, `role.view`, `audit.view`.
+**Phase 1** — `merchant.view`, `merchant.edit`, `merchant.suspend`, `role.view`,
+`role.manage`, `admin.view`, `admin.manage`, `audit.view`.
 
 **Phase 2** — `business.view`, `business.edit`, `item.view`, `item.manage`,
 `service.view`, `service.manage`, `material.view`, `material.manage`, `stock.view`,
-`stock.adjust`.
+`stock.adjust`, `unit.manage`.
 
 **Phase 3** — `customer.view`, `customer.create`, `customer.edit`, `customer.archive`,
 `supplier.view`, `supplier.manage`, `purchase.view`, `purchase.manage`, `payment.view`,
