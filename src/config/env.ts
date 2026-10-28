@@ -35,6 +35,36 @@ function list(key: string, fallback: string[]): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Cloudinary credentials, from either `CLOUDINARY_URL` (cloudinary://key:secret@cloud,
+ * the form Cloudinary's console hands out) or the three separate variables. When none
+ * are set, catalog images fall back to the local upload directory.
+ */
+function cloudinaryConfig() {
+  let cloudName = process.env.CLOUDINARY_CLOUD_NAME ?? '';
+  let apiKey = process.env.CLOUDINARY_API_KEY ?? '';
+  let apiSecret = process.env.CLOUDINARY_API_SECRET ?? '';
+
+  const url = process.env.CLOUDINARY_URL;
+  if (url) {
+    const match = /^cloudinary:\/\/([^:]+):([^@]+)@(.+)$/.exec(url.trim());
+    if (!match) throw new Error('CLOUDINARY_URL must look like cloudinary://<api_key>:<api_secret>@<cloud_name>');
+    apiKey = match[1] ?? '';
+    apiSecret = match[2] ?? '';
+    cloudName = match[3] ?? '';
+  }
+
+  return {
+    enabled: Boolean(cloudName && apiKey && apiSecret),
+    cloudName,
+    apiKey,
+    apiSecret,
+    /** Top-level Cloudinary folder; catalog images go under <folder>/items and <folder>/materials. */
+    folder: str('CLOUDINARY_FOLDER', 'inperge'),
+    timeoutMs: int('CLOUDINARY_TIMEOUT_MS', 30_000),
+  };
+}
+
 const nodeEnv = str('NODE_ENV', 'development') as NodeEnv;
 const isProduction = nodeEnv === 'production';
 
@@ -87,6 +117,8 @@ export const env = {
     dir: path.resolve(process.cwd(), str('UPLOAD_DIR', 'uploads')),
     maxBytes: int('UPLOAD_MAX_BYTES', 5 * 1024 * 1024),
   },
+
+  cloudinary: cloudinaryConfig(),
 
   seed: {
     superAdminEmail: str('SEED_SUPER_ADMIN_EMAIL', 'admin@sellersdash.local'),

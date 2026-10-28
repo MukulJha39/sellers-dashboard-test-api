@@ -5,6 +5,9 @@
  * the server would reject, and the admin panel can label them consistently.
  */
 
+/** The most photos a product or raw material can carry. The first one is its cover. */
+export const CATALOG_MAX_IMAGES = 8;
+
 /**
  * Units of measurement are records the admin panel manages (see models/MeasurementUnit).
  * A unit is referred to everywhere by its `code`, a stable slug such as "kilogram".

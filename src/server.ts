@@ -51,7 +51,11 @@ async function start(): Promise<void> {
       port: env.port,
       environment: env.nodeEnv,
       apiPrefix: env.apiPrefix,
+      catalogImages: env.cloudinary.enabled ? `cloudinary (${env.cloudinary.cloudName})` : 'local uploads',
     });
+    if (env.isProduction && !env.cloudinary.enabled) {
+      logger.warn('Cloudinary is not configured; product photos are being stored on this server');
+    }
   });
 
   server.on('error', (error: NodeJS.ErrnoException) => {

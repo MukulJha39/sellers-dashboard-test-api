@@ -5,7 +5,9 @@ import type { ItemDocument } from '../../models/Item';
 import type { RawMaterialDocument } from '../../models/RawMaterial';
 import type { ServiceOfferingDocument } from '../../models/ServiceOffering';
 import type { StockMovementDocument } from '../../models/StockMovement';
+import { cloudinaryThumbnail } from '../../services/cloudinaryService';
 import { fromThousandths } from '../../utils/quantity';
+import { LEGACY_IMAGE_ID, type GalleryRecord } from './catalogImageService';
 
 /** Category names keyed by id, so a list can label rows without N extra queries. */
 export type CategoryNames = Map<string, string>;
@@ -49,6 +51,50 @@ function presentStock(source: {
   };
 }
 
+export interface ImageView {
+  id: string;
+  url: string;
+  /** A small square variant for lists; the same as `url` when not on Cloudinary. */
+  thumbnailUrl: string;
+  width: number | null;
+  height: number | null;
+  bytes: number | null;
+  isCover: boolean;
+  createdAt: string;
+}
+
+/**
+ * A record's gallery in display order, cover first. A cover set before galleries
+ * existed is presented as a single image with the id "cover".
+ */
+export function presentImages(record: GalleryRecord & { updatedAt?: Date }): ImageView[] {
+  const images = record.images ?? [];
+  if (images.length === 0 && record.imageUrl) {
+    return [
+      {
+        id: LEGACY_IMAGE_ID,
+        url: record.imageUrl,
+        thumbnailUrl: cloudinaryThumbnail(record.imageUrl),
+        width: null,
+        height: null,
+        bytes: null,
+        isCover: true,
+        createdAt: (record.updatedAt ?? new Date()).toISOString(),
+      },
+    ];
+  }
+  return images.map((image, index) => ({
+    id: String(image._id),
+    url: image.url,
+    thumbnailUrl: cloudinaryThumbnail(image.url),
+    width: image.width ?? null,
+    height: image.height ?? null,
+    bytes: image.bytes ?? null,
+    isCover: index === 0,
+    createdAt: image.createdAt.toISOString(),
+  }));
+}
+
 export function presentItem(item: ItemDocument, names?: CategoryNames) {
   return {
     id: String(item._id),
@@ -58,6 +104,7 @@ export function presentItem(item: ItemDocument, names?: CategoryNames) {
     categoryName: categoryName(item.categoryId, names),
     description: item.description ?? null,
     imageUrl: item.imageUrl ?? null,
+    images: presentImages(item),
     sku: item.sku ?? null,
     barcode: item.barcode ?? null,
     ...presentStock(item),
@@ -80,6 +127,7 @@ export function presentRawMaterial(material: RawMaterialDocument, names?: Catego
     categoryName: categoryName(material.categoryId, names),
     notes: material.notes ?? null,
     imageUrl: material.imageUrl ?? null,
+    images: presentImages(material),
     ...presentStock(material),
     purchaseCostMinor: material.purchaseCostMinor ?? null,
     batchReference: material.batchReference ?? null,

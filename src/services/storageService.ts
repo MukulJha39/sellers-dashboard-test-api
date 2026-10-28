@@ -4,6 +4,7 @@ import path from 'path';
 import { env } from '../config/env';
 import { AppError, ErrorCode } from '../utils/AppError';
 import { logger } from '../utils/logger';
+import { destroyOnCloudinary, uploadToCloudinary } from './cloudinaryService';
 
 export interface StoredFile {
   fileName: string;
@@ -50,10 +51,10 @@ export function publicUrlFor(relativePath: string): string {
 }
 
 /**
- * Stores an image under a generated name. The original filename is never used, which
- * removes path traversal and extension spoofing from the equation entirely.
+ * Checks an upload is a non-empty PNG, JPG or WebP within the size limit, judged by its
+ * bytes. Run before anything is stored, so a batch can be refused as a whole.
  */
-export async function storeImage(buffer: Buffer, subDirectory: string): Promise<StoredFile> {
+export function assertImage(buffer: Buffer): ImageKind {
   if (buffer.length === 0) {
     throw AppError.badRequest(ErrorCode.UPLOAD_REJECTED, 'The uploaded file is empty.');
   }
@@ -68,6 +69,15 @@ export async function storeImage(buffer: Buffer, subDirectory: string): Promise<
   if (!kind) {
     throw AppError.badRequest(ErrorCode.UPLOAD_REJECTED, 'Upload a PNG, JPG or WebP image.');
   }
+  return kind;
+}
+
+/**
+ * Stores an image under a generated name. The original filename is never used, which
+ * removes path traversal and extension spoofing from the equation entirely.
+ */
+export async function storeImage(buffer: Buffer, subDirectory: string): Promise<StoredFile> {
+  const kind = assertImage(buffer);
 
   const directory = await ensureUploadDir(subDirectory);
   const fileName = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${kind.extension}`;
@@ -104,4 +114,63 @@ export async function deleteStoredFile(url: string | null | undefined): Promise<
       logger.warn('Could not remove stored file', { reason: code ?? 'unknown' });
     }
   }
+}
+
+/* ------------------------------ catalog images ----------------------------- */
+
+export type ImageProvider = 'cloudinary' | 'local' | 'external';
+
+export interface StoredImage {
+  url: string;
+  /** Cloudinary's id for the asset; null for anything not stored there. */
+  publicId: string | null;
+  provider: ImageProvider;
+  width: number | null;
+  height: number | null;
+  bytes: number;
+}
+
+/**
+ * Stores a catalog photo: on Cloudinary when it is configured, otherwise in the local
+ * upload directory (development and tests). The bytes are checked either way.
+ */
+export async function storeCatalogImage(buffer: Buffer, subDirectory: string): Promise<StoredImage> {
+  const kind = assertImage(buffer);
+
+  if (env.cloudinary.enabled) {
+    const uploaded = await uploadToCloudinary(buffer, {
+      folder: `${env.cloudinary.folder}/${subDirectory}`,
+      mimeType: kind.mimeType,
+    });
+    return {
+      url: uploaded.url,
+      publicId: uploaded.publicId,
+      provider: 'cloudinary',
+      width: uploaded.width,
+      height: uploaded.height,
+      bytes: uploaded.bytes,
+    };
+  }
+
+  const stored = await storeImage(buffer, subDirectory);
+  return { url: stored.url, publicId: null, provider: 'local', width: null, height: null, bytes: stored.bytes };
+}
+
+/** Best-effort removal of a stored catalog photo, wherever it lives. Never throws. */
+export async function removeStoredImage(image: {
+  url: string;
+  publicId?: string | null;
+  provider?: ImageProvider | null;
+}): Promise<void> {
+  if (image.publicId && (image.provider === 'cloudinary' || !image.provider)) {
+    if (env.cloudinary.enabled) {
+      await destroyOnCloudinary(image.publicId);
+    } else {
+      logger.warn('Cloudinary image left in place because Cloudinary is not configured', {
+        publicId: image.publicId,
+      });
+    }
+    return;
+  }
+  await deleteStoredFile(image.url);
 }

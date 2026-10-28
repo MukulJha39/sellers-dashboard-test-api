@@ -4,12 +4,20 @@ import type { Unit } from '../../config/catalog';
 import { Item, type ItemDocument } from '../../models/Item';
 import { computeIsLowStock } from '../../models/stockFields';
 import { diffFields, writeAudit } from '../../services/auditService';
-import { deleteStoredFile } from '../../services/storageService';
 import { AppError } from '../../utils/AppError';
 import { escapeRegex, type Pagination } from '../../utils/pagination';
 import { describeMoneyMinor } from '../../utils/money';
 import { fromThousandths } from '../../utils/quantity';
 import { withTransaction } from '../../db/transaction';
+import {
+  addCatalogImages,
+  removeAllCatalogImages,
+  removeCatalogCover,
+  removeCatalogImage,
+  reorderCatalogImages,
+  replaceCatalogCover,
+  type GalleryTarget,
+} from './catalogImageService';
 import { assertCatalogRecordDeletable, deleteStockLedgerFor } from './catalogReferences';
 import { resolveCategoryId } from './categoryService';
 import { recordOpeningStock, type StockActor } from './stockService';
@@ -339,7 +347,7 @@ export async function deleteItem(input: {
   await assertCatalogRecordDeletable(input.merchantId, 'item', item._id);
 
   const name = item.name;
-  const imageUrl = item.imageUrl ?? null;
+  const storedImages = { imageUrl: item.imageUrl ?? null, images: [...(item.images ?? [])] };
   const quantityThousandths = item.quantityThousandths;
   const unit = item.unit;
 
@@ -349,7 +357,7 @@ export async function deleteItem(input: {
     return removed;
   });
 
-  await deleteStoredFile(imageUrl);
+  await removeAllCatalogImages(storedImages);
 
   await writeAudit({
     actorType: input.actor.type,
@@ -367,17 +375,49 @@ export async function deleteItem(input: {
   return { name, movementsDeleted };
 }
 
+function galleryFor(item: ItemDocument): GalleryTarget<ItemDocument> {
+  return { model: Item, record: item, folder: 'items', noun: 'product' };
+}
+
+/** Adds photos to the product's gallery. */
+export async function addItemImages(input: {
+  merchantId: Types.ObjectId;
+  itemId: string;
+  images: Buffer[];
+}): Promise<ItemDocument> {
+  const item = await loadItem(input.merchantId, input.itemId);
+  return addCatalogImages(galleryFor(item), input.images);
+}
+
+export async function removeItemImage(input: {
+  merchantId: Types.ObjectId;
+  itemId: string;
+  imageId: string;
+}): Promise<ItemDocument> {
+  const item = await loadItem(input.merchantId, input.itemId);
+  return removeCatalogImage(galleryFor(item), input.imageId);
+}
+
+export async function reorderItemImages(input: {
+  merchantId: Types.ObjectId;
+  itemId: string;
+  imageIds: string[];
+}): Promise<ItemDocument> {
+  const item = await loadItem(input.merchantId, input.itemId);
+  return reorderCatalogImages(galleryFor(item), input.imageIds);
+}
+
+/**
+ * The original single-image endpoint: a buffer replaces the cover photo, null removes
+ * it. The rest of the gallery is left alone.
+ */
 export async function replaceItemImage(input: {
   merchantId: Types.ObjectId;
   itemId: string;
-  imageUrl: string | null;
+  image: Buffer | null;
 }): Promise<ItemDocument> {
   const item = await loadItem(input.merchantId, input.itemId);
-  const previous = item.imageUrl;
-
-  item.imageUrl = input.imageUrl;
-  await item.save();
-
-  if (previous && previous !== input.imageUrl) await deleteStoredFile(previous);
-  return item;
+  return input.image
+    ? replaceCatalogCover(galleryFor(item), input.image)
+    : removeCatalogCover(galleryFor(item));
 }

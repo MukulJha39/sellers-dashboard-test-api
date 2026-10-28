@@ -26,3 +26,9 @@ process.env.UPLOAD_MAX_BYTES = '5242880';
 process.env.SEED_SUPER_ADMIN_EMAIL = 'admin@sellersdash.local';
 process.env.SEED_SUPER_ADMIN_PASSWORD = 'TestAdminPass#123';
 process.env.SEED_SUPER_ADMIN_NAME = 'Super Admin';
+
+// Never reach a real Cloudinary account from tests, whatever the local .env says.
+process.env.CLOUDINARY_URL = '';
+process.env.CLOUDINARY_CLOUD_NAME = '';
+process.env.CLOUDINARY_API_KEY = '';
+process.env.CLOUDINARY_API_SECRET = '';

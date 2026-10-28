@@ -1,4 +1,5 @@
 import multer from 'multer';
+import { CATALOG_MAX_IMAGES } from '../config/catalog';
 import { env } from '../config/env';
 import { AppError, ErrorCode } from '../utils/AppError';
 
@@ -15,6 +16,19 @@ export const uploadImage = multer({
   fileFilter: (_req, file, callback) => {
     if (!ACCEPTED_MIME_TYPES.has(file.mimetype.toLowerCase())) {
       callback(AppError.badRequest(ErrorCode.UPLOAD_REJECTED, 'Upload a PNG, JPG or WebP image.'));
+      return;
+    }
+    callback(null, true);
+  },
+});
+
+/** Several images in one request, for a catalog gallery (field `images`). */
+export const uploadImages = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: env.upload.maxBytes, files: CATALOG_MAX_IMAGES, fields: 10 },
+  fileFilter: (_req, file, callback) => {
+    if (!ACCEPTED_MIME_TYPES.has(file.mimetype.toLowerCase())) {
+      callback(AppError.badRequest(ErrorCode.UPLOAD_REJECTED, 'Upload PNG, JPG or WebP images.'));
       return;
     }
     callback(null, true);

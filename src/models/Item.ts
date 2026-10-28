@@ -1,5 +1,6 @@
 import { Schema, model, type Document, type Model, type Types } from 'mongoose';
 import type { Unit } from '../config/catalog';
+import { imagesField, type CatalogImage } from './catalogImage';
 import {
   archiveSchemaFields,
   catalogJsonTransform,
@@ -19,7 +20,9 @@ export interface ItemDocument extends Document<Types.ObjectId> {
   name: string;
   categoryId?: Types.ObjectId | null;
   description?: string | null;
+  /** The cover photo: always the first entry of `images`, kept for older clients. */
   imageUrl?: string | null;
+  images: CatalogImage[];
   sku?: string | null;
   barcode?: string | null;
 
@@ -47,6 +50,7 @@ const itemSchema = new Schema<ItemDocument>(
     categoryId: categoryRefField,
     description: { type: String, default: null, trim: true, maxlength: 1000 },
     imageUrl: { type: String, default: null, maxlength: 500 },
+    images: imagesField,
     sku: { type: String, default: null, trim: true, maxlength: 60 },
     barcode: { type: String, default: null, trim: true, maxlength: 60 },
 

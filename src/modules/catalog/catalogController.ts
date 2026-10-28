@@ -59,6 +59,9 @@ import {
   ITEM_SORT_FIELDS,
   listItems,
   loadItem,
+  addItemImages,
+  removeItemImage,
+  reorderItemImages,
   replaceItemImage,
   setItemArchived,
   updateItem,
@@ -71,6 +74,9 @@ import {
   listMaterials,
   loadMaterial,
   MATERIAL_SORT_FIELDS,
+  addMaterialImages,
+  removeMaterialImage,
+  reorderMaterialImages,
   replaceMaterialImage,
   setMaterialArchived,
   updateMaterial,
@@ -99,6 +105,15 @@ import {
 import { catalogSummary, lowStockRecords } from './summaryService';
 
 /* --------------------------------- helpers -------------------------------- */
+
+/** The files of a multi-image upload, in the order the client sent them. */
+function uploadedBuffers(req: Request): Buffer[] {
+  const files = Array.isArray(req.files) ? req.files : [];
+  if (files.length === 0) {
+    throw AppError.badRequest(ErrorCode.UPLOAD_REJECTED, 'Choose at least one image to upload.');
+  }
+  return files.map((file) => file.buffer);
+}
 
 function merchantContext(req: Request): AuthenticatedMerchant {
   if (!req.merchant) throw AppError.unauthenticated('Sign in to continue.');
@@ -374,11 +389,44 @@ export async function putItemImage(req: Request, res: Response): Promise<void> {
     throw AppError.badRequest(ErrorCode.UPLOAD_REJECTED, 'Choose an image to upload.');
   }
 
-  const stored = await storeImage(req.file.buffer, 'items');
   const item = await replaceItemImage({
     merchantId: merchant.objectId,
     itemId: String(req.params.id),
-    imageUrl: stored.url,
+    image: req.file.buffer,
+  });
+
+  sendData(res, { item: presentItem(item) });
+}
+
+/** Adds photos to the gallery from one multipart request (repeat the `images` field per file). */
+export async function postItemImages(req: Request, res: Response): Promise<void> {
+  const merchant = merchantContext(req);
+  const item = await addItemImages({
+    merchantId: merchant.objectId,
+    itemId: String(req.params.id),
+    images: uploadedBuffers(req),
+  });
+
+  sendData(res, { item: presentItem(item) }, 201);
+}
+
+export async function destroyItemGalleryImage(req: Request, res: Response): Promise<void> {
+  const merchant = merchantContext(req);
+  const item = await removeItemImage({
+    merchantId: merchant.objectId,
+    itemId: String(req.params.id),
+    imageId: String(req.params.imageId),
+  });
+
+  sendData(res, { item: presentItem(item) });
+}
+
+export async function putItemImageOrder(req: Request, res: Response): Promise<void> {
+  const merchant = merchantContext(req);
+  const item = await reorderItemImages({
+    merchantId: merchant.objectId,
+    itemId: String(req.params.id),
+    imageIds: (req.body.imageIds as unknown[]).map(String),
   });
 
   sendData(res, { item: presentItem(item) });
@@ -406,7 +454,7 @@ export async function deleteItemImage(req: Request, res: Response): Promise<void
   const item = await replaceItemImage({
     merchantId: merchant.objectId,
     itemId: String(req.params.id),
-    imageUrl: null,
+    image: null,
   });
 
   sendData(res, { item: presentItem(item) });
@@ -676,11 +724,44 @@ export async function putMaterialImage(req: Request, res: Response): Promise<voi
     throw AppError.badRequest(ErrorCode.UPLOAD_REJECTED, 'Choose an image to upload.');
   }
 
-  const stored = await storeImage(req.file.buffer, 'materials');
   const material = await replaceMaterialImage({
     merchantId: merchant.objectId,
     materialId: String(req.params.id),
-    imageUrl: stored.url,
+    image: req.file.buffer,
+  });
+
+  sendData(res, { material: presentRawMaterial(material) });
+}
+
+/** Adds photos to the gallery from one multipart request (repeat the `images` field per file). */
+export async function postMaterialImages(req: Request, res: Response): Promise<void> {
+  const merchant = merchantContext(req);
+  const material = await addMaterialImages({
+    merchantId: merchant.objectId,
+    materialId: String(req.params.id),
+    images: uploadedBuffers(req),
+  });
+
+  sendData(res, { material: presentRawMaterial(material) }, 201);
+}
+
+export async function destroyMaterialGalleryImage(req: Request, res: Response): Promise<void> {
+  const merchant = merchantContext(req);
+  const material = await removeMaterialImage({
+    merchantId: merchant.objectId,
+    materialId: String(req.params.id),
+    imageId: String(req.params.imageId),
+  });
+
+  sendData(res, { material: presentRawMaterial(material) });
+}
+
+export async function putMaterialImageOrder(req: Request, res: Response): Promise<void> {
+  const merchant = merchantContext(req);
+  const material = await reorderMaterialImages({
+    merchantId: merchant.objectId,
+    materialId: String(req.params.id),
+    imageIds: (req.body.imageIds as unknown[]).map(String),
   });
 
   sendData(res, { material: presentRawMaterial(material) });
@@ -704,7 +785,7 @@ export async function deleteMaterialImage(req: Request, res: Response): Promise<
   const material = await replaceMaterialImage({
     merchantId: merchant.objectId,
     materialId: String(req.params.id),
-    imageUrl: null,
+    image: null,
   });
 
   sendData(res, { material: presentRawMaterial(material) });

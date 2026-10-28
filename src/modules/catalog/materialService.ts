@@ -4,11 +4,19 @@ import type { Unit } from '../../config/catalog';
 import { RawMaterial, type RawMaterialDocument } from '../../models/RawMaterial';
 import { computeIsLowStock } from '../../models/stockFields';
 import { diffFields, writeAudit } from '../../services/auditService';
-import { deleteStoredFile } from '../../services/storageService';
 import { AppError } from '../../utils/AppError';
 import { escapeRegex, type Pagination } from '../../utils/pagination';
 import { fromThousandths } from '../../utils/quantity';
 import { withTransaction } from '../../db/transaction';
+import {
+  addCatalogImages,
+  removeAllCatalogImages,
+  removeCatalogCover,
+  removeCatalogImage,
+  reorderCatalogImages,
+  replaceCatalogCover,
+  type GalleryTarget,
+} from './catalogImageService';
 import { assertCatalogRecordDeletable, deleteStockLedgerFor } from './catalogReferences';
 import { resolveCategoryId } from './categoryService';
 import { assertQuantityFitsUnit, resolveUnitChoice } from './unitService';
@@ -298,7 +306,7 @@ export async function deleteMaterial(input: {
   await assertCatalogRecordDeletable(input.merchantId, 'material', material._id);
 
   const name = material.name;
-  const imageUrl = material.imageUrl ?? null;
+  const storedImages = { imageUrl: material.imageUrl ?? null, images: [...(material.images ?? [])] };
   const quantityThousandths = material.quantityThousandths;
   const unit = material.unit;
 
@@ -311,7 +319,7 @@ export async function deleteMaterial(input: {
     return removed;
   });
 
-  await deleteStoredFile(imageUrl);
+  await removeAllCatalogImages(storedImages);
 
   await writeAudit({
     actorType: input.actor.type,
@@ -329,17 +337,49 @@ export async function deleteMaterial(input: {
   return { name, movementsDeleted };
 }
 
+function galleryFor(material: RawMaterialDocument): GalleryTarget<RawMaterialDocument> {
+  return { model: RawMaterial, record: material, folder: 'materials', noun: 'raw material' };
+}
+
+/** Adds photos to the raw material's gallery. */
+export async function addMaterialImages(input: {
+  merchantId: Types.ObjectId;
+  materialId: string;
+  images: Buffer[];
+}): Promise<RawMaterialDocument> {
+  const material = await loadMaterial(input.merchantId, input.materialId);
+  return addCatalogImages(galleryFor(material), input.images);
+}
+
+export async function removeMaterialImage(input: {
+  merchantId: Types.ObjectId;
+  materialId: string;
+  imageId: string;
+}): Promise<RawMaterialDocument> {
+  const material = await loadMaterial(input.merchantId, input.materialId);
+  return removeCatalogImage(galleryFor(material), input.imageId);
+}
+
+export async function reorderMaterialImages(input: {
+  merchantId: Types.ObjectId;
+  materialId: string;
+  imageIds: string[];
+}): Promise<RawMaterialDocument> {
+  const material = await loadMaterial(input.merchantId, input.materialId);
+  return reorderCatalogImages(galleryFor(material), input.imageIds);
+}
+
+/**
+ * The original single-image endpoint: a buffer replaces the cover photo, null removes
+ * it. The rest of the gallery is left alone.
+ */
 export async function replaceMaterialImage(input: {
   merchantId: Types.ObjectId;
   materialId: string;
-  imageUrl: string | null;
+  image: Buffer | null;
 }): Promise<RawMaterialDocument> {
   const material = await loadMaterial(input.merchantId, input.materialId);
-  const previous = material.imageUrl;
-
-  material.imageUrl = input.imageUrl;
-  await material.save();
-
-  if (previous && previous !== input.imageUrl) await deleteStoredFile(previous);
-  return material;
+  return input.image
+    ? replaceCatalogCover(galleryFor(material), input.image)
+    : removeCatalogCover(galleryFor(material));
 }

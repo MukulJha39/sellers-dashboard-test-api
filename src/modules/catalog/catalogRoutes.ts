@@ -1,12 +1,14 @@
 import { Router } from 'express';
 import { authenticateMerchant } from '../../middleware/auth';
-import { uploadImage } from '../../middleware/upload';
+import { uploadImage, uploadImages } from '../../middleware/upload';
 import { asyncHandler, validate } from '../../middleware/validate';
 import {
   categoryArchiveHandler,
   deleteItemImage,
+  destroyItemGalleryImage,
   destroyItem,
   deleteMaterialImage,
+  destroyMaterialGalleryImage,
   destroyMaterial,
   deleteServiceImage,
   destroyService,
@@ -33,7 +35,11 @@ import {
   postService,
   postStockAdjustment,
   putItemImage,
+  putItemImageOrder,
+  postItemImages,
   putMaterialImage,
+  putMaterialImageOrder,
+  postMaterialImages,
   putServiceImage,
   putStockQuantity,
   serviceArchiveHandler,
@@ -45,10 +51,14 @@ import {
   categoryRenameRules,
   itemCreateRules,
   itemIdRules,
+  itemImageOrderRules,
+  itemImageRules,
   itemListRules,
   itemUpdateRules,
   materialCreateRules,
   materialIdRules,
+  materialImageOrderRules,
+  materialImageRules,
   materialListRules,
   materialUpdateRules,
   rejectDirectStockWrite,
@@ -123,6 +133,19 @@ itemRoutes.put(
   asyncHandler(putItemImage),
 );
 itemRoutes.delete('/:id/image', ...validate(itemIdRules), asyncHandler(deleteItemImage));
+// The gallery. The single-image routes above keep working and act on the cover photo.
+itemRoutes.post(
+  '/:id/images',
+  uploadImages.array('images'),
+  ...validate(itemIdRules),
+  asyncHandler(postItemImages),
+);
+itemRoutes.put('/:id/images/order', ...validate(itemImageOrderRules), asyncHandler(putItemImageOrder));
+itemRoutes.delete(
+  '/:id/images/:imageId',
+  ...validate(itemImageRules),
+  asyncHandler(destroyItemGalleryImage),
+);
 // Permanent delete. Refused with 409 RECORD_IN_USE while an order or purchase refers to it.
 itemRoutes.delete('/:id', ...validate(itemIdRules), asyncHandler(destroyItem));
 catalogRouter.use('/items', itemRoutes);
@@ -183,6 +206,19 @@ materialRoutes.put(
   asyncHandler(putMaterialImage),
 );
 materialRoutes.delete('/:id/image', ...validate(materialIdRules), asyncHandler(deleteMaterialImage));
+// The gallery. The single-image routes above keep working and act on the cover photo.
+materialRoutes.post(
+  '/:id/images',
+  uploadImages.array('images'),
+  ...validate(materialIdRules),
+  asyncHandler(postMaterialImages),
+);
+materialRoutes.put('/:id/images/order', ...validate(materialImageOrderRules), asyncHandler(putMaterialImageOrder));
+materialRoutes.delete(
+  '/:id/images/:imageId',
+  ...validate(materialImageRules),
+  asyncHandler(destroyMaterialGalleryImage),
+);
 materialRoutes.delete('/:id', ...validate(materialIdRules), asyncHandler(destroyMaterial));
 catalogRouter.use('/materials', materialRoutes);
 

@@ -1,6 +1,7 @@
 import type { ErrorRequestHandler, NextFunction, Request, Response } from 'express';
 import multer from 'multer';
 import mongoose from 'mongoose';
+import { CATALOG_MAX_IMAGES } from '../config/catalog';
 import { env } from '../config/env';
 import { AppError, ErrorCode, type FieldIssue } from '../utils/AppError';
 import { logger } from '../utils/logger';
@@ -16,7 +17,11 @@ function translate(error: unknown): AppError {
     const message =
       error.code === 'LIMIT_FILE_SIZE'
         ? `Images must be smaller than ${Math.floor(env.upload.maxBytes / (1024 * 1024))} MB.`
-        : 'That file could not be accepted.';
+        : error.code === 'LIMIT_FILE_COUNT'
+          ? `Upload at most ${CATALOG_MAX_IMAGES} images at a time.`
+          : error.code === 'LIMIT_UNEXPECTED_FILE'
+            ? `Send the file in the field this endpoint expects, not "${error.field ?? 'unknown'}".`
+            : 'That file could not be accepted.';
     return AppError.badRequest(ErrorCode.UPLOAD_REJECTED, message);
   }
 

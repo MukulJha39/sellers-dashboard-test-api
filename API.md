@@ -108,6 +108,8 @@ list of which units are countable.
 | `OTP_RESEND_TOO_SOON` | 429 | Inside the resend cooldown (`meta.retryAfterSeconds`) |
 | `RATE_LIMITED` | 429 | Too many requests |
 | `UPLOAD_REJECTED` | 400 | File missing, too large, or not a real image |
+| `IMAGE_LIMIT_REACHED` | 409 | A product or raw material already has (or would pass) 8 images (`meta.maxImages`, `meta.remaining`) |
+| `IMAGE_STORAGE_UNAVAILABLE` | 502 | The image host (Cloudinary) could not be reached; nothing was saved, so retrying is safe |
 | `INTERNAL_ERROR` | 500 | Unexpected failure; `requestId` identifies it in the logs |
 
 `CONFLICT` covers two Phase 2 cases:
@@ -610,7 +612,8 @@ the merchant before they archive.
 `GET /api/v1/items` — `search`, `categoryId`, `archived`, `lowStock`, `page`, `limit`, `sort`
 `POST /api/v1/items` · `GET /api/v1/items/:id` · `PATCH /api/v1/items/:id`
 `POST /api/v1/items/:id/archive` · `POST /api/v1/items/:id/restore`
-`PUT /api/v1/items/:id/image` · `DELETE /api/v1/items/:id/image`
+`PUT /api/v1/items/:id/image` · `DELETE /api/v1/items/:id/image` — the cover photo
+`POST /api/v1/items/:id/images` · `PUT /api/v1/items/:id/images/order` · `DELETE /api/v1/items/:id/images/:imageId` — the gallery, see [Product and raw material images](#product-and-raw-material-images)
 `DELETE /api/v1/items/:id` — permanent, see [Deleting a catalog record](#deleting-a-catalog-record)
 
 **ItemView**
@@ -623,6 +626,7 @@ the merchant before they archive.
   "categoryName": null,
   "description": null,
   "imageUrl": null,
+  "images": [],
   "sku": "BED-001",
   "barcode": null,
   "unit": "piece",
@@ -669,12 +673,69 @@ which retires the record.
 `GET /api/v1/materials` — `search`, `categoryId`, `archived`, `lowStock`, `expiringWithinDays`, `page`, `limit`, `sort`
 `POST /api/v1/materials` · `GET /api/v1/materials/:id` · `PATCH /api/v1/materials/:id`
 `POST /api/v1/materials/:id/archive` · `POST /api/v1/materials/:id/restore`
-`PUT /api/v1/materials/:id/image` · `DELETE /api/v1/materials/:id/image`
+`PUT /api/v1/materials/:id/image` · `DELETE /api/v1/materials/:id/image` — the cover photo
+`POST /api/v1/materials/:id/images` · `PUT /api/v1/materials/:id/images/order` · `DELETE /api/v1/materials/:id/images/:imageId` — the gallery, see [Product and raw material images](#product-and-raw-material-images)
 `DELETE /api/v1/materials/:id` — permanent, see [Deleting a catalog record](#deleting-a-catalog-record)
 
 Same stock fields as an item, plus `purchaseCostMinor`, `batchReference`, `expiryDate`
 and `supplierName`. `supplierName` is free text for now; suppliers become records of
 their own in Phase 3, and this field is what will migrate into them.
+
+### Product and raw material images
+
+Products (items) and raw materials each carry a gallery of up to **8** photos. Images
+are stored on Cloudinary when it is configured (see `CLOUDINARY_*` in `.env.example`)
+and in the local `uploads/` directory otherwise. Clients always upload to this API,
+never to Cloudinary directly, so every file is checked by its bytes (PNG, JPG or WebP,
+at most `UPLOAD_MAX_BYTES`) and the Cloudinary secret never leaves the server.
+
+**Adding** — `POST /api/v1/items/:id/images` (or `/materials/:id/images`), as
+`multipart/form-data` with one `images` field per file, up to 8 files per request:
+
+```bash
+curl -X POST "$API/items/$ID/images" -H "authorization: Bearer $TOKEN"   -F images=@front.jpg -F images=@back.jpg
+```
+
+`201` `{ "data": { "item": ItemView } }` (`material` for raw materials). The batch is all
+or nothing: if one file is refused, or the gallery would pass 8, nothing is stored.
+New photos go at the end; the first photo a record ever gets becomes its cover.
+
+**Removing** — `DELETE /api/v1/items/:id/images/:imageId`. Removing the cover promotes
+the next photo. The file is deleted from storage too.
+
+**Reordering** — `PUT /api/v1/items/:id/images/order` with every image id, once each,
+in the new order. Whatever is first becomes the cover:
+
+```json
+{ "imageIds": ["6720…b1", "6720…a9", "6720…c4"] }
+```
+
+**ImageView** — each entry of `images`, cover first:
+
+```json
+{
+  "id": "6720…b1",
+  "url": "https://res.cloudinary.com/<cloud>/image/upload/v1730…/inperge/items/abc123.jpg",
+  "thumbnailUrl": "https://res.cloudinary.com/<cloud>/image/upload/c_fill,w_240,h_240,q_auto,f_auto/v1730…/inperge/items/abc123.jpg",
+  "width": 1200,
+  "height": 900,
+  "bytes": 184233,
+  "isCover": true,
+  "createdAt": "2026-10-28T10:00:00.000Z"
+}
+```
+
+Use `thumbnailUrl` in lists and grids and `url` for a full-size view. Outside
+Cloudinary the two are the same, and `width`/`height` are `null`.
+
+**Compatibility.** `imageUrl` is still returned and always equals the cover's `url`
+(or `null`). `PUT /:id/image` now replaces the cover photo and leaves the rest of the
+gallery alone; `DELETE /:id/image` removes the cover. A record whose image was set
+before galleries existed shows it as a single entry with the id `"cover"`, which can
+be removed by that id; the first gallery change turns it into a regular entry.
+
+Deleting a product or raw material permanently also deletes all of its photos. The
+admin panel reads the same `images` array from `GET /admin/items` and `GET /admin/materials`.
 
 ---
 

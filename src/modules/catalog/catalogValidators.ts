@@ -4,6 +4,7 @@ import { body, param, query, type ValidationChain } from 'express-validator';
 import {
   BILLING_UNITS,
   BUSINESS_CATEGORIES,
+  CATALOG_MAX_IMAGES,
   CATEGORY_KINDS,
   CURRENCIES,
   STOCK_ADJUSTMENT_REASONS,
@@ -12,6 +13,7 @@ import {
   UNIT_CODE_PATTERN,
 } from '../../config/catalog';
 import { AppError, ErrorCode } from '../../utils/AppError';
+import { LEGACY_IMAGE_ID } from './catalogImageService';
 import { MAX_MONEY_MINOR } from '../../utils/money';
 import { isValidQuantity, MAX_QUANTITY } from '../../utils/quantity';
 
@@ -211,6 +213,28 @@ export const serviceUpdateRules: ValidationChain[] = [...serviceIdRules, ...serv
 export const materialIdRules: ValidationChain[] = [
   param('id').isMongoId().withMessage('That material was not found.'),
 ];
+
+/* ------------------------------ image galleries ----------------------------- */
+
+/** An image in a gallery. "cover" names a cover photo that predates galleries. */
+function imageIdParam(): ValidationChain {
+  return param('imageId')
+    .custom((value: string) => value === LEGACY_IMAGE_ID || /^[a-f0-9]{24}$/i.test(value))
+    .withMessage('That image was not found.');
+}
+
+function imageOrderBody(): ValidationChain {
+  return body('imageIds')
+    .isArray({ min: 1, max: CATALOG_MAX_IMAGES })
+    .withMessage(`Send imageIds as a list of 1 to ${CATALOG_MAX_IMAGES} image ids.`)
+    .custom((ids: unknown[]) => ids.every((id) => typeof id === 'string' && /^[a-f0-9]{24}$/i.test(id)))
+    .withMessage('Every entry in imageIds must be an image id.');
+}
+
+export const itemImageRules: ValidationChain[] = [...itemIdRules, imageIdParam()];
+export const itemImageOrderRules: ValidationChain[] = [...itemIdRules, imageOrderBody()];
+export const materialImageRules: ValidationChain[] = [...materialIdRules, imageIdParam()];
+export const materialImageOrderRules: ValidationChain[] = [...materialIdRules, imageOrderBody()];
 
 const materialFieldRules = (optional: boolean): ValidationChain[] => [
   nameField('name', { optional }),
