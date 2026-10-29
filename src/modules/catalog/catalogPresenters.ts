@@ -149,6 +149,7 @@ export function presentService(service: ServiceOfferingDocument, names?: Categor
     categoryName: categoryName(service.categoryId, names),
     description: service.description ?? null,
     imageUrl: service.imageUrl ?? null,
+    images: presentImages(service),
     billingUnit: service.billingUnit,
     rateMinor: service.rateMinor,
     durationMinutes: service.durationMinutes ?? null,

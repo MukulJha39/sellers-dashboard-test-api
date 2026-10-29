@@ -2,6 +2,7 @@ import request from 'supertest';
 import { CATALOG_MAX_IMAGES } from '../src/config/catalog';
 import { env } from '../src/config/env';
 import { Item } from '../src/models/Item';
+import { ServiceOffering } from '../src/models/ServiceOffering';
 import { cloudinaryThumbnail, signParams } from '../src/services/cloudinaryService';
 import {
   API,
@@ -9,12 +10,14 @@ import {
   auth,
   createItem,
   createMaterial,
+  createService,
   pngFixture,
   registerMerchant,
   seedRbac,
   signInAdmin,
   type ItemView,
   type MaterialView,
+  type ServiceView,
 } from './helpers';
 
 function jpegFixture(): Buffer {
@@ -270,6 +273,82 @@ describe('admin catalog lists', () => {
 
     expect(items.body.data.items[0].images).toHaveLength(2);
     expect(materials.body.data.items[0].images).toHaveLength(1);
+  });
+
+  it('include service images too', async () => {
+    await seedRbac();
+    const admin = await signInAdmin();
+    const merchant = await registerMerchant();
+    const service = await createService(merchant.accessToken);
+    await upload(merchant.accessToken, `/services/${service.id}/images`, 3);
+
+    const services = await request(app()).get(`${API}/admin/services`).set(...auth(admin.accessToken));
+
+    expect(services.body.data.items[0].images).toHaveLength(3);
+    expect(services.body.data.items[0].images[0].isCover).toBe(true);
+  });
+});
+
+describe('service image gallery', () => {
+  it('uploads, reorders, replaces the cover and removes images', async () => {
+    const merchant = await registerMerchant();
+    const service = await createService(merchant.accessToken);
+    expect(service.images).toEqual([]);
+
+    const added = await upload(merchant.accessToken, `/services/${service.id}/images`, 3);
+    expect(added.status).toBe(201);
+    const withImages: ServiceView = added.body.data.service;
+    expect(withImages.images).toHaveLength(3);
+    expect(withImages.imageUrl).toBe(withImages.images[0]?.url);
+    expect(withImages.images[0]?.url).toMatch(/\/uploads\/services\//);
+
+    const reversed = withImages.images.map((image) => image.id).reverse();
+    const reordered = await request(app())
+      .put(`${API}/services/${service.id}/images/order`)
+      .set(...auth(merchant.accessToken))
+      .send({ imageIds: reversed });
+    expect(reordered.status).toBe(200);
+    expect(reordered.body.data.service.images.map((image: { id: string }) => image.id)).toEqual(reversed);
+
+    // The app's existing single-image upload now edits the cover photo.
+    const replaced = await request(app())
+      .put(`${API}/services/${service.id}/image`)
+      .set(...auth(merchant.accessToken))
+      .attach('image', jpegFixture(), { filename: 'new.jpg', contentType: 'image/jpeg' });
+    const afterReplace: ServiceView = replaced.body.data.service;
+    expect(afterReplace.images).toHaveLength(3);
+    expect(afterReplace.images[0]?.id).not.toBe(reversed[0]);
+    expect(afterReplace.images.slice(1).map((image) => image.id)).toEqual(reversed.slice(1));
+
+    const removed = await request(app())
+      .delete(`${API}/services/${service.id}/images/${afterReplace.images[0]?.id}`)
+      .set(...auth(merchant.accessToken));
+    expect(removed.body.data.service.images).toHaveLength(2);
+    expect(removed.body.data.service.imageUrl).toBe(removed.body.data.service.images[0].url);
+  });
+
+  it(`stops at ${CATALOG_MAX_IMAGES} images`, async () => {
+    const merchant = await registerMerchant();
+    const service = await createService(merchant.accessToken);
+    await upload(merchant.accessToken, `/services/${service.id}/images`, CATALOG_MAX_IMAGES);
+
+    const response = await upload(merchant.accessToken, `/services/${service.id}/images`, 1);
+
+    expect(response.status).toBe(409);
+    expect(response.body.error.code).toBe('IMAGE_LIMIT_REACHED');
+  });
+
+  it('deletes the photos with the service', async () => {
+    const merchant = await registerMerchant();
+    const service = await createService(merchant.accessToken);
+    await upload(merchant.accessToken, `/services/${service.id}/images`, 2);
+
+    const response = await request(app())
+      .delete(`${API}/services/${service.id}`)
+      .set(...auth(merchant.accessToken));
+
+    expect(response.status).toBe(200);
+    expect(await ServiceOffering.countDocuments({ _id: service.id })).toBe(0);
   });
 });
 

@@ -235,6 +235,8 @@ export const itemImageRules: ValidationChain[] = [...itemIdRules, imageIdParam()
 export const itemImageOrderRules: ValidationChain[] = [...itemIdRules, imageOrderBody()];
 export const materialImageRules: ValidationChain[] = [...materialIdRules, imageIdParam()];
 export const materialImageOrderRules: ValidationChain[] = [...materialIdRules, imageOrderBody()];
+export const serviceImageRules: ValidationChain[] = [...serviceIdRules, imageIdParam()];
+export const serviceImageOrderRules: ValidationChain[] = [...serviceIdRules, imageOrderBody()];
 
 const materialFieldRules = (optional: boolean): ValidationChain[] => [
   nameField('name', { optional }),

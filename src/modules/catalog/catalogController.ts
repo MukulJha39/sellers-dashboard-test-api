@@ -33,7 +33,6 @@ import {
   STOCK_HOLDING_ORDER_STATUSES,
   TERMINAL_ORDER_STATUSES,
 } from '../../config/orders';
-import { storeImage } from '../../services/storageService';
 import { AppError, ErrorCode } from '../../utils/AppError';
 import { buildPageMeta, sendData, sendList } from '../../utils/response';
 import { parsePagination, parseSort } from '../../utils/pagination';
@@ -88,6 +87,9 @@ import {
   deleteService,
   listServices,
   loadService,
+  addServiceImages,
+  removeServiceImage,
+  reorderServiceImages,
   replaceServiceImage,
   SERVICE_SORT_FIELDS,
   setServiceArchived,
@@ -571,11 +573,44 @@ export async function putServiceImage(req: Request, res: Response): Promise<void
     throw AppError.badRequest(ErrorCode.UPLOAD_REJECTED, 'Choose an image to upload.');
   }
 
-  const stored = await storeImage(req.file.buffer, 'services');
   const service = await replaceServiceImage({
     merchantId: merchant.objectId,
     serviceId: String(req.params.id),
-    imageUrl: stored.url,
+    image: req.file.buffer,
+  });
+
+  sendData(res, { service: presentService(service) });
+}
+
+/** Adds photos to the gallery from one multipart request (repeat the `images` field per file). */
+export async function postServiceImages(req: Request, res: Response): Promise<void> {
+  const merchant = merchantContext(req);
+  const service = await addServiceImages({
+    merchantId: merchant.objectId,
+    serviceId: String(req.params.id),
+    images: uploadedBuffers(req),
+  });
+
+  sendData(res, { service: presentService(service) }, 201);
+}
+
+export async function destroyServiceGalleryImage(req: Request, res: Response): Promise<void> {
+  const merchant = merchantContext(req);
+  const service = await removeServiceImage({
+    merchantId: merchant.objectId,
+    serviceId: String(req.params.id),
+    imageId: String(req.params.imageId),
+  });
+
+  sendData(res, { service: presentService(service) });
+}
+
+export async function putServiceImageOrder(req: Request, res: Response): Promise<void> {
+  const merchant = merchantContext(req);
+  const service = await reorderServiceImages({
+    merchantId: merchant.objectId,
+    serviceId: String(req.params.id),
+    imageIds: (req.body.imageIds as unknown[]).map(String),
   });
 
   sendData(res, { service: presentService(service) });
@@ -599,7 +634,7 @@ export async function deleteServiceImage(req: Request, res: Response): Promise<v
   const service = await replaceServiceImage({
     merchantId: merchant.objectId,
     serviceId: String(req.params.id),
-    imageUrl: null,
+    image: null,
   });
 
   sendData(res, { service: presentService(service) });

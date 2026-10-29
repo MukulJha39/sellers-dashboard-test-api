@@ -658,7 +658,8 @@ Searching treats the term as literal text, not as a pattern, so a merchant typin
 `GET /api/v1/services` — `search`, `categoryId`, `archived`, `isActive`, `billingUnit`, `page`, `limit`, `sort`
 `POST /api/v1/services` · `GET /api/v1/services/:id` · `PATCH /api/v1/services/:id`
 `POST /api/v1/services/:id/archive` · `POST /api/v1/services/:id/restore`
-`PUT /api/v1/services/:id/image` · `DELETE /api/v1/services/:id/image`
+`PUT /api/v1/services/:id/image` · `DELETE /api/v1/services/:id/image` — the cover photo
+`POST /api/v1/services/:id/images` · `PUT /api/v1/services/:id/images/order` · `DELETE /api/v1/services/:id/images/:imageId` — the gallery, see [Product and raw material images](#product-and-raw-material-images)
 `DELETE /api/v1/services/:id` — permanent, see [Deleting a catalog record](#deleting-a-catalog-record)
 
 `billingUnit` is one of `one_time`, `hourly`, `per_session`, `per_unit`, `package`.
@@ -683,20 +684,20 @@ their own in Phase 3, and this field is what will migrate into them.
 
 ### Product and raw material images
 
-Products (items) and raw materials each carry a gallery of up to **8** photos. Images
+Products (items), services and raw materials each carry a gallery of up to **8** photos. Images
 are stored on Cloudinary when it is configured (see `CLOUDINARY_*` in `.env.example`)
 and in the local `uploads/` directory otherwise. Clients always upload to this API,
 never to Cloudinary directly, so every file is checked by its bytes (PNG, JPG or WebP,
 at most `UPLOAD_MAX_BYTES`) and the Cloudinary secret never leaves the server.
 
-**Adding** — `POST /api/v1/items/:id/images` (or `/materials/:id/images`), as
+**Adding** — `POST /api/v1/items/:id/images` (or `/services/:id/images`, `/materials/:id/images`), as
 `multipart/form-data` with one `images` field per file, up to 8 files per request:
 
 ```bash
 curl -X POST "$API/items/$ID/images" -H "authorization: Bearer $TOKEN"   -F images=@front.jpg -F images=@back.jpg
 ```
 
-`201` `{ "data": { "item": ItemView } }` (`material` for raw materials). The batch is all
+`201` `{ "data": { "item": ItemView } }` (`service` or `material` for those). The batch is all
 or nothing: if one file is refused, or the gallery would pass 8, nothing is stored.
 New photos go at the end; the first photo a record ever gets becomes its cover.
 
@@ -734,8 +735,8 @@ gallery alone; `DELETE /:id/image` removes the cover. A record whose image was s
 before galleries existed shows it as a single entry with the id `"cover"`, which can
 be removed by that id; the first gallery change turns it into a regular entry.
 
-Deleting a product or raw material permanently also deletes all of its photos. The
-admin panel reads the same `images` array from `GET /admin/items` and `GET /admin/materials`.
+Deleting a product, service or raw material permanently also deletes all of its photos. The
+admin panel reads the same `images` array from `GET /admin/items`, `GET /admin/services` and `GET /admin/materials`.
 
 ---
 

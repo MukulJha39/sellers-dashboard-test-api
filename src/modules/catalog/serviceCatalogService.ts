@@ -3,10 +3,18 @@ import { Types } from 'mongoose';
 import { DURATION_BILLING_UNITS, type BillingUnit } from '../../config/catalog';
 import { ServiceOffering, type ServiceOfferingDocument } from '../../models/ServiceOffering';
 import { diffFields, writeAudit } from '../../services/auditService';
-import { deleteStoredFile } from '../../services/storageService';
 import { AppError } from '../../utils/AppError';
 import { describeMoneyMinor } from '../../utils/money';
 import { escapeRegex, type Pagination } from '../../utils/pagination';
+import {
+  addCatalogImages,
+  removeAllCatalogImages,
+  removeCatalogCover,
+  removeCatalogImage,
+  reorderCatalogImages,
+  replaceCatalogCover,
+  type GalleryTarget,
+} from './catalogImageService';
 import { assertCatalogRecordDeletable } from './catalogReferences';
 import { resolveCategoryId } from './categoryService';
 import type { StockActor } from './stockService';
@@ -240,11 +248,11 @@ export async function deleteService(input: {
   await assertCatalogRecordDeletable(input.merchantId, 'service', service._id);
 
   const name = service.name;
-  const imageUrl = service.imageUrl ?? null;
+  const storedImages = { imageUrl: service.imageUrl ?? null, images: [...(service.images ?? [])] };
   const rateMinor = service.rateMinor;
 
   await ServiceOffering.deleteOne({ _id: service._id, merchantId: input.merchantId });
-  await deleteStoredFile(imageUrl);
+  await removeAllCatalogImages(storedImages);
 
   await writeAudit({
     actorType: input.actor.type,
@@ -260,17 +268,49 @@ export async function deleteService(input: {
   return { name };
 }
 
+function galleryFor(service: ServiceOfferingDocument): GalleryTarget<ServiceOfferingDocument> {
+  return { model: ServiceOffering, record: service, folder: 'services', noun: 'service' };
+}
+
+/** Adds photos to the service's gallery. */
+export async function addServiceImages(input: {
+  merchantId: Types.ObjectId;
+  serviceId: string;
+  images: Buffer[];
+}): Promise<ServiceOfferingDocument> {
+  const service = await loadService(input.merchantId, input.serviceId);
+  return addCatalogImages(galleryFor(service), input.images);
+}
+
+export async function removeServiceImage(input: {
+  merchantId: Types.ObjectId;
+  serviceId: string;
+  imageId: string;
+}): Promise<ServiceOfferingDocument> {
+  const service = await loadService(input.merchantId, input.serviceId);
+  return removeCatalogImage(galleryFor(service), input.imageId);
+}
+
+export async function reorderServiceImages(input: {
+  merchantId: Types.ObjectId;
+  serviceId: string;
+  imageIds: string[];
+}): Promise<ServiceOfferingDocument> {
+  const service = await loadService(input.merchantId, input.serviceId);
+  return reorderCatalogImages(galleryFor(service), input.imageIds);
+}
+
+/**
+ * The original single-image endpoint: a buffer replaces the cover photo, null removes
+ * it. The rest of the gallery is left alone.
+ */
 export async function replaceServiceImage(input: {
   merchantId: Types.ObjectId;
   serviceId: string;
-  imageUrl: string | null;
+  image: Buffer | null;
 }): Promise<ServiceOfferingDocument> {
   const service = await loadService(input.merchantId, input.serviceId);
-  const previous = service.imageUrl;
-
-  service.imageUrl = input.imageUrl;
-  await service.save();
-
-  if (previous && previous !== input.imageUrl) await deleteStoredFile(previous);
-  return service;
+  return input.image
+    ? replaceCatalogCover(galleryFor(service), input.image)
+    : removeCatalogCover(galleryFor(service));
 }

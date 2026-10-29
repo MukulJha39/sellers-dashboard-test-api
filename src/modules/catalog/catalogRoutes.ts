@@ -11,6 +11,7 @@ import {
   destroyMaterialGalleryImage,
   destroyMaterial,
   deleteServiceImage,
+  destroyServiceGalleryImage,
   destroyService,
   getCatalogMeta,
   getCatalogSummary,
@@ -41,6 +42,8 @@ import {
   putMaterialImageOrder,
   postMaterialImages,
   putServiceImage,
+  putServiceImageOrder,
+  postServiceImages,
   putStockQuantity,
   serviceArchiveHandler,
 } from './catalogController';
@@ -64,6 +67,8 @@ import {
   rejectDirectStockWrite,
   serviceCreateRules,
   serviceIdRules,
+  serviceImageOrderRules,
+  serviceImageRules,
   serviceListRules,
   serviceUpdateRules,
   stockAdjustRules,
@@ -174,6 +179,19 @@ serviceRoutes.put(
   asyncHandler(putServiceImage),
 );
 serviceRoutes.delete('/:id/image', ...validate(serviceIdRules), asyncHandler(deleteServiceImage));
+// The gallery. The single-image routes above keep working and act on the cover photo.
+serviceRoutes.post(
+  '/:id/images',
+  uploadImages.array('images'),
+  ...validate(serviceIdRules),
+  asyncHandler(postServiceImages),
+);
+serviceRoutes.put('/:id/images/order', ...validate(serviceImageOrderRules), asyncHandler(putServiceImageOrder));
+serviceRoutes.delete(
+  '/:id/images/:imageId',
+  ...validate(serviceImageRules),
+  asyncHandler(destroyServiceGalleryImage),
+);
 serviceRoutes.delete('/:id', ...validate(serviceIdRules), asyncHandler(destroyService));
 catalogRouter.use('/services', serviceRoutes);
 

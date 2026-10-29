@@ -1,5 +1,6 @@
 import { Schema, model, type Document, type Model, type Types } from 'mongoose';
 import { BILLING_UNITS, type BillingUnit } from '../config/catalog';
+import { imagesField, type CatalogImage } from './catalogImage';
 import { archiveSchemaFields, catalogJsonTransform, categoryRefField } from './stockFields';
 
 /**
@@ -16,7 +17,9 @@ export interface ServiceOfferingDocument extends Document<Types.ObjectId> {
   name: string;
   categoryId?: Types.ObjectId | null;
   description?: string | null;
+  /** The cover photo: always the first entry of `images`, kept for older clients. */
   imageUrl?: string | null;
+  images: CatalogImage[];
 
   billingUnit: BillingUnit;
   rateMinor: number;
@@ -42,6 +45,7 @@ const serviceOfferingSchema = new Schema<ServiceOfferingDocument>(
     categoryId: categoryRefField,
     description: { type: String, default: null, trim: true, maxlength: 1000 },
     imageUrl: { type: String, default: null, maxlength: 500 },
+    images: imagesField,
 
     billingUnit: { type: String, required: true, enum: BILLING_UNITS, default: 'one_time' },
     rateMinor: { type: Number, required: true, default: 0, min: 0 },
