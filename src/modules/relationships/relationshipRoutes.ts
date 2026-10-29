@@ -14,6 +14,7 @@ import {
   getSuppliers,
   patchCustomer,
   patchPayment,
+  destroyPayment,
   patchPurchase,
   patchSupplier,
   postCustomer,
@@ -30,6 +31,7 @@ import {
   customerListRules,
   customerUpdateRules,
   paymentAnnotateRules,
+  paymentDeleteRules,
   paymentCreateRules,
   paymentListRules,
   purchaseCancelRules,
@@ -127,7 +129,9 @@ relationshipRouter.use('/purchases', purchaseRoutes);
 
 const paymentRoutes = merchantRouter();
 paymentRoutes.get('/', ...validate(paymentListRules), asyncHandler(getPayments));
-// Corrects what an entry says about itself. The amount and method are refused by the
-// validator: entries stay append-only where money is concerned.
+// Corrects a payment: a wrong amount, or what the entry says about itself. The method
+// cannot change. Either way the order or purchase is rebuilt from its payments.
 paymentRoutes.patch('/:id', ...validate(paymentAnnotateRules), asyncHandler(patchPayment));
+// Removes a payment recorded by mistake.
+paymentRoutes.delete('/:id', ...validate(paymentDeleteRules), asyncHandler(destroyPayment));
 relationshipRouter.use('/payments', paymentRoutes);

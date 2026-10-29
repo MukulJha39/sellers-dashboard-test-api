@@ -264,12 +264,29 @@ export const paymentCreateRules: ValidationChain[] = [
  * misunderstood something, and silently dropping it would let them believe the correction
  * was applied. A wrong amount is corrected by a further entry.
  */
+/** Why a payment's amount was changed or the payment deleted, for the audit trail. */
+function correctionReason(): ValidationChain {
+  return body('reason')
+    .optional({ values: 'null' })
+    .isString()
+    .bail()
+    .trim()
+    .isLength({ max: 300 })
+    .withMessage('Keep the reason to 300 characters.');
+}
+
+/**
+ * Corrects a payment: its amount (when it was entered wrong), its reference, its date
+ * or its notes. The method still cannot change.
+ */
 export const paymentAnnotateRules: ValidationChain[] = [
   param('id').isMongoId().withMessage('That payment was not found.'),
   body('amountMinor')
-    .not()
-    .exists()
-    .withMessage('A payment amount cannot be changed. Record a further payment instead.'),
+    .optional()
+    .isInt({ min: 1, max: MAX_MONEY_MINOR })
+    .withMessage('Enter an amount greater than zero, as a whole number of paise.')
+    .toInt(),
+  correctionReason(),
   body('method')
     .not()
     .exists()
@@ -277,6 +294,13 @@ export const paymentAnnotateRules: ValidationChain[] = [
   body('reference').optional({ values: 'null' }).isString().bail().trim().isLength({ max: 80 }),
   body('paidAt').optional({ values: 'null' }).isISO8601().withMessage('Enter a valid date.'),
   body('notes').optional({ values: 'null' }).isString().bail().trim().isLength({ max: 500 }),
+];
+
+/** Deletes a payment recorded by mistake. The reason may come in the body or the query. */
+export const paymentDeleteRules: ValidationChain[] = [
+  param('id').isMongoId().withMessage('That payment was not found.'),
+  correctionReason(),
+  query('reason').optional({ values: 'falsy' }).isString().bail().trim().isLength({ max: 300 }),
 ];
 
 export const paymentListRules: ValidationChain[] = [

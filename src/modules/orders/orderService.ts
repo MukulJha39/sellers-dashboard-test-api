@@ -59,6 +59,40 @@ export interface OrderInput {
   orderDate?: string | null;
   dueDate?: string | null;
   notes?: string | null;
+  /** `YYYY-MM-DD`; null clears it. */
+  deliveryDate?: string | null;
+  /** `HH:mm`, 24-hour; null clears it. */
+  deliveryTime?: string | null;
+  deliveryLocation?: string | null;
+}
+
+/** A delivery day as UTC midnight of the date the merchant chose, whatever their time zone. */
+function parseDeliveryDate(value: string | null | undefined): Date | null {
+  if (value === undefined || value === null || value.trim() === '') return null;
+  const parsed = new Date(`${value.trim().slice(0, 10)}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    throw AppError.validation('Please correct the highlighted fields.', [
+      { field: 'deliveryDate', message: 'Enter the delivery date as YYYY-MM-DD.' },
+    ]);
+  }
+  return parsed;
+}
+
+function cleanText(value: string | null | undefined): string | null {
+  return value?.trim() || null;
+}
+
+/** The delivery fields as the audit trail and the presenter write them. */
+export function deliveryView(order: {
+  deliveryDate?: Date | null;
+  deliveryTime?: string | null;
+  deliveryLocation?: string | null;
+}) {
+  return {
+    deliveryDate: order.deliveryDate ? order.deliveryDate.toISOString().slice(0, 10) : null,
+    deliveryTime: order.deliveryTime ?? null,
+    deliveryLocation: order.deliveryLocation ?? null,
+  };
 }
 
 function parseDate(value: string | null | undefined, field: string, fallback?: Date): Date | null {
@@ -396,6 +430,9 @@ export async function createOrder(input: {
           orderDate,
           dueDate,
           notes: data.notes?.trim() || null,
+          deliveryDate: parseDeliveryDate(data.deliveryDate),
+          deliveryTime: cleanText(data.deliveryTime),
+          deliveryLocation: cleanText(data.deliveryLocation),
           paidMinor: 0,
           paymentStatus: derivePaymentStatus(totals.totalMinor, 0),
           installments: [],
@@ -626,6 +663,15 @@ export async function updateOrder(input: {
   if (data.dueDate !== undefined) order.dueDate = parseDate(data.dueDate, 'dueDate');
   if (data.notes !== undefined) order.notes = data.notes?.trim() || null;
 
+  const deliveryBefore = deliveryView(order);
+  if (data.deliveryDate !== undefined) order.deliveryDate = parseDeliveryDate(data.deliveryDate);
+  if (data.deliveryTime !== undefined) order.deliveryTime = cleanText(data.deliveryTime);
+  if (data.deliveryLocation !== undefined) order.deliveryLocation = cleanText(data.deliveryLocation);
+  const deliveryAfter = deliveryView(order);
+  const deliveryChanges = (Object.keys(deliveryAfter) as Array<keyof typeof deliveryAfter>)
+    .filter((field) => deliveryBefore[field] !== deliveryAfter[field])
+    .map((field) => ({ field, from: deliveryBefore[field], to: deliveryAfter[field] }));
+
   await order.save();
   if (order.customerId) await refreshCustomerOutstanding(input.merchantId, order.customerId);
 
@@ -636,7 +682,11 @@ export async function updateOrder(input: {
     action: 'order.updated',
     targetType: 'order',
     targetId: order._id,
-    summary: `Updated order ${order.reference}.`,
+    summary:
+      deliveryChanges.length > 0 && !changingLines && !changingMoney
+        ? `Updated the delivery details of order ${order.reference}.`
+        : `Updated order ${order.reference}.`,
+    changes: deliveryChanges,
     metadata: { linesChanged: changingLines, totalsChanged: changingMoney },
     req: input.req,
   });
@@ -863,7 +913,7 @@ export async function orderActivity(
 
 /* ---------------------------------- listing --------------------------------- */
 
-export const ORDER_SORT_FIELDS = ['orderDate', 'createdAt', 'totalMinor', 'dueDate'] as const;
+export const ORDER_SORT_FIELDS = ['orderDate', 'createdAt', 'totalMinor', 'dueDate', 'deliveryDate'] as const;
 
 export interface OrderFilters {
   search?: string;
@@ -970,6 +1020,30 @@ registerPayable<OrderDocument>('order', {
     doc.paymentStatus = next.paymentStatus;
     // The plan is a projection of the payments, so it is brought along with them.
     if (doc.installments.length > 0) allocateToInstallments(doc, applied, next.installmentNumber);
+  },
+
+  // After a payment is corrected or deleted, the plan is replayed from the entries that
+  // remain, in the order they were recorded, so each instalment again shows exactly
+  // what the ledger allocated to it.
+  rebuild: (doc, next, entries) => {
+    doc.paidMinor = next.paidMinor;
+    doc.paymentStatus = next.paymentStatus;
+    if (doc.installments.length === 0) return;
+
+    for (const installment of doc.installments) {
+      installment.paidMinor = 0;
+      installment.status = 'pending';
+    }
+    for (const entry of entries) {
+      // A payment can name an instalment from a plan that has since been replaced; it
+      // then fills the earliest unpaid ones, as it would have without a name.
+      const named =
+        entry.installmentNumber &&
+        doc.installments.some((installment) => installment.number === entry.installmentNumber)
+          ? entry.installmentNumber
+          : null;
+      allocateToInstallments(doc, entry.amountMinor, named);
+    }
   },
 
   save: (doc, session) => doc.save({ session }).then(() => undefined),

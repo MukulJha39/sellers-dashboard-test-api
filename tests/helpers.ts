@@ -325,6 +325,9 @@ export async function createOrder(
     orderDate?: string;
     dueDate?: string | null;
     notes?: string;
+    deliveryDate?: string | null;
+    deliveryTime?: string | null;
+    deliveryLocation?: string | null;
   },
 ): Promise<OrderView> {
   const response = await request(app())

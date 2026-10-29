@@ -110,6 +110,16 @@ export interface OrderDocument extends Document<Types.ObjectId> {
 
   notes?: string | null;
 
+  /**
+   * When and where the order is to be delivered, as three separate fields so each can be
+   * set, shown and searched on its own. The date is a calendar day (stored at UTC
+   * midnight and served as `YYYY-MM-DD`, so it never shifts with time zones); the time is
+   * a 24-hour `HH:mm`; the location is the address as the merchant wrote it.
+   */
+  deliveryDate?: Date | null;
+  deliveryTime?: string | null;
+  deliveryLocation?: string | null;
+
   /** Maintained by the payment engine; see `src/modules/payments/paymentEngine.ts`. */
   paidMinor: number;
   paymentStatus: PaymentStatus;
@@ -173,6 +183,9 @@ const orderSchema = new Schema<OrderDocument>(
 
     orderDate: { type: Date, required: true },
     dueDate: { type: Date, default: null },
+    deliveryDate: { type: Date, default: null },
+    deliveryTime: { type: String, default: null, match: /^([01]\d|2[0-3]):[0-5]\d$/ },
+    deliveryLocation: { type: String, default: null, trim: true, maxlength: 500 },
     completedAt: { type: Date, default: null },
     cancelledAt: { type: Date, default: null },
     cancelledReason: { type: String, default: null, trim: true, maxlength: 300 },
@@ -194,6 +207,8 @@ orderSchema.index({ merchantId: 1, reference: 1 }, { unique: true });
 orderSchema.index({ merchantId: 1, customerId: 1, orderDate: -1 });
 orderSchema.index({ merchantId: 1, status: 1, orderDate: -1 });
 orderSchema.index({ merchantId: 1, paymentStatus: 1, dueDate: 1 });
+// Serves "what is going out on this day" lists and the deliveryDate sort.
+orderSchema.index({ merchantId: 1, deliveryDate: 1 });
 // Overdue is a query, not a stored flag: everything unsettled with a due date in the
 // past. This index is what keeps that query and the receivables list cheap.
 orderSchema.index({ merchantId: 1, status: 1, paymentStatus: 1, dueDate: 1 });

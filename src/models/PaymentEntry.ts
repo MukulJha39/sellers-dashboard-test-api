@@ -105,15 +105,15 @@ const IMMUTABLE_FIELDS = [
 ] as const;
 
 /**
- * Append-only where it counts, for the same reason the stock ledger is: a payment history
- * whose amounts can be edited is not a history. A mistake in an amount is corrected by a
- * further entry, and refunds and credits arrive with returns in Phase 5.
+ * Guarded where it counts, for the same reason the stock ledger is: a payable's paid total
+ * has to stay equal to the sum of its entries, so nothing may change an entry's money
+ * through a plain save and leave the payable behind.
  *
- * What an entry says *about itself* — a mistyped cheque number, a note, the date the money
- * actually changed hands — is not money and can be corrected. Guarding those as well would
- * leave a merchant with a permanently wrong reference and no way to fix it, which is a
- * worse record rather than a safer one. Every correction is audited, and the entry it
- * belongs to keeps its amount.
+ * A payment entered with the wrong amount, or recorded by mistake, is fixed through the
+ * payment engine (`correctPayment` / `deletePayment`). It changes the entry and rebuilds
+ * the payable from its ledger in one transaction, and the audit trail keeps the old and
+ * new amounts. What an entry says *about itself* — a reference, a note, the date the
+ * money changed hands — is not money and can be corrected freely.
  */
 paymentEntrySchema.pre('save', function (next) {
   if (this.isNew) {

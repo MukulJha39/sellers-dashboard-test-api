@@ -20,6 +20,7 @@ import { deleteItem, setItemArchived, updateItem } from '../catalog/itemService'
 import { deleteMaterial, setMaterialArchived, updateMaterial } from '../catalog/materialService';
 import { deleteService, setServiceArchived, updateService } from '../catalog/serviceCatalogService';
 import { applyStockMovement, type StockActor } from '../catalog/stockService';
+import { readItemInput, readMaterialInput, readServiceInput } from '../catalog/catalogController';
 import { catalogSummary } from '../catalog/summaryService';
 import {
   ADMIN_CATALOG_SORT_FIELDS,
@@ -42,7 +43,7 @@ function adminContext(req: Request): AuthenticatedAdmin {
 }
 
 /** The admin acting, recorded in the ledger and the audit trail. */
-function adminActor(req: Request): StockActor {
+export function adminActor(req: Request): StockActor {
   const admin = adminContext(req);
   return { type: 'admin', id: admin.objectId, label: `${admin.name} (${admin.email})` };
 }
@@ -216,7 +217,9 @@ export async function patchAdminItem(req: Request, res: Response): Promise<void>
   const item = await updateItem({
     merchantId: existing.merchantId,
     itemId: String(existing._id),
-    data: req.body as Record<string, never>,
+    // Read exactly as the merchant app reads it, so converted fields such as the
+    // low-stock threshold are applied rather than silently dropped.
+    data: readItemInput(req.body as Record<string, unknown>),
     actor: adminActor(req),
     req,
   });
@@ -270,7 +273,9 @@ export async function patchAdminService(req: Request, res: Response): Promise<vo
   const service = await updateService({
     merchantId: existing.merchantId,
     serviceId: String(existing._id),
-    data: req.body as Record<string, never>,
+    // Read exactly as the merchant app reads it, so converted fields such as the
+    // low-stock threshold are applied rather than silently dropped.
+    data: readServiceInput(req.body as Record<string, unknown>),
     actor: adminActor(req),
     req,
   });
@@ -312,7 +317,9 @@ export async function patchAdminMaterial(req: Request, res: Response): Promise<v
   const material = await updateMaterial({
     merchantId: existing.merchantId,
     materialId: String(existing._id),
-    data: req.body as Record<string, never>,
+    // Read exactly as the merchant app reads it, so converted fields such as the
+    // low-stock threshold are applied rather than silently dropped.
+    data: readMaterialInput(req.body as Record<string, unknown>),
     actor: adminActor(req),
     req,
   });

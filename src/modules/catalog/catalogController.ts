@@ -109,7 +109,7 @@ import { catalogSummary, lowStockRecords } from './summaryService';
 /* --------------------------------- helpers -------------------------------- */
 
 /** The files of a multi-image upload, in the order the client sent them. */
-function uploadedBuffers(req: Request): Buffer[] {
+export function uploadedBuffers(req: Request): Buffer[] {
   const files = Array.isArray(req.files) ? req.files : [];
   if (files.length === 0) {
     throw AppError.badRequest(ErrorCode.UPLOAD_REJECTED, 'Choose at least one image to upload.');
@@ -144,7 +144,7 @@ function optionalBoolean(value: unknown): boolean | undefined {
 }
 
 /** Reads a decimal quantity from the body and returns it in thousandths. */
-function quantityFromBody(body: Record<string, unknown>, key: string): number | undefined {
+export function quantityFromBody(body: Record<string, unknown>, key: string): number | undefined {
   const value = body[key];
   if (value === undefined || value === null) return undefined;
   return toThousandths(Number(value));
@@ -276,7 +276,7 @@ export function categoryArchiveHandler(archived: boolean) {
 
 /* ---------------------------------- items --------------------------------- */
 
-function readItemInput(body: Record<string, unknown>): Partial<ItemInput> {
+export function readItemInput(body: Record<string, unknown>): Partial<ItemInput> {
   const input: Partial<ItemInput> = {};
 
   if (body.name !== undefined) input.name = String(body.name);
@@ -464,7 +464,7 @@ export async function deleteItemImage(req: Request, res: Response): Promise<void
 
 /* --------------------------------- services ------------------------------- */
 
-function readServiceInput(body: Record<string, unknown>): Partial<ServiceInput> {
+export function readServiceInput(body: Record<string, unknown>): Partial<ServiceInput> {
   const input: Partial<ServiceInput> = {};
 
   if (body.name !== undefined) input.name = String(body.name);
@@ -642,7 +642,7 @@ export async function deleteServiceImage(req: Request, res: Response): Promise<v
 
 /* -------------------------------- materials ------------------------------- */
 
-function readMaterialInput(body: Record<string, unknown>): Partial<MaterialInput> {
+export function readMaterialInput(body: Record<string, unknown>): Partial<MaterialInput> {
   const input: Partial<MaterialInput> = {};
 
   if (body.name !== undefined) input.name = String(body.name);

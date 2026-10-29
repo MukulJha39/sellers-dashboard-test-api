@@ -73,6 +73,18 @@ export interface PayableAdapter<TDoc = unknown> {
   ): void;
   save(doc: TDoc, session?: ClientSession): Promise<void>;
   /**
+   * Rebuilds the derived payment fields from the full list of entries, oldest first.
+   *
+   * Used after an entry is corrected or deleted, when "add this amount" no longer
+   * describes the change. A payable that keeps a schedule replays the entries into it
+   * here; one without a schedule can leave this out and the engine sets the totals.
+   */
+  rebuild?(
+    doc: TDoc,
+    next: { paidMinor: number; paymentStatus: PaymentStatus },
+    entries: ReadonlyArray<{ amountMinor: number; installmentNumber?: number | null }>,
+  ): void;
+  /**
    * Called after the transaction commits, so a counterparty's outstanding balance can
    * be brought in step. Optional: not every payable has one.
    */
@@ -265,74 +277,264 @@ export async function recordPayment(input: RecordPaymentInput): Promise<RecordPa
   return result;
 }
 
-/** What may be corrected on an entry after the fact. Money is not on this list. */
-export interface AnnotatePaymentInput {
+/* ------------------------- correcting a wrong payment ------------------------ */
+
+/** Where a payable stands after its payments changed, for the client to redraw. */
+export interface PayableSummary {
+  type: PayableType;
+  id: string;
+  reference: string;
+  totalMinor: number;
+  paidMinor: number;
+  outstandingMinor: number;
+  paymentStatus: PaymentStatus;
+}
+
+function summarise(type: PayableType, snapshot: PayableSnapshot): PayableSummary {
+  return {
+    type,
+    id: String(snapshot.id),
+    reference: snapshot.reference,
+    totalMinor: snapshot.totalMinor,
+    paidMinor: snapshot.paidMinor,
+    outstandingMinor: outstandingMinor(snapshot.totalMinor, snapshot.paidMinor),
+    paymentStatus: derivePaymentStatus(snapshot.totalMinor, snapshot.paidMinor),
+  };
+}
+
+async function loadEntry(merchantId: Types.ObjectId, paymentId: string, session?: ClientSession) {
+  if (!Types.ObjectId.isValid(paymentId)) throw AppError.notFound('That payment was not found.');
+  const entry = await PaymentEntry.findOne({ _id: paymentId, merchantId }).session(session ?? null);
+  if (!entry) throw AppError.notFound('That payment was not found.');
+  return entry;
+}
+
+/**
+ * Brings a payable back in line with its ledger after an entry was corrected or removed.
+ *
+ * Everything derived from the entries is rebuilt from them rather than patched: the
+ * paid total, the payment status, the instalment progress (replayed in the order the
+ * payments were recorded) and each entry's "balance after", so every row still reads
+ * true on its own.
+ */
+async function rebuildFromLedger(
+  adapter: PayableAdapter<never>,
+  doc: never,
+  payableType: PayableType,
+  session?: ClientSession,
+): Promise<void> {
+  const snapshot = adapter.snapshot(doc);
+  const entries = await PaymentEntry.find({
+    merchantId: snapshot.merchantId,
+    payableType,
+    payableId: snapshot.id,
+  })
+    .sort({ createdAt: 1, _id: 1 })
+    .session(session ?? null);
+
+  const paidMinor = entries.reduce((sum, entry) => sum + entry.amountMinor, 0);
+  const next = { paidMinor, paymentStatus: derivePaymentStatus(snapshot.totalMinor, paidMinor) };
+
+  if (adapter.rebuild) adapter.rebuild(doc, next, entries);
+  else adapter.applyPayment(doc, next);
+  await adapter.save(doc, session);
+
+  // The running balance is a stored projection too. Written with a direct update on
+  // purpose: the model refuses money changes made through a plain save.
+  let running = 0;
+  const updates = entries.flatMap((entry) => {
+    running += entry.amountMinor;
+    const balanceAfterMinor = outstandingMinor(snapshot.totalMinor, running);
+    return entry.balanceAfterMinor === balanceAfterMinor
+      ? []
+      : [{ updateOne: { filter: { _id: entry._id }, update: { $set: { balanceAfterMinor } } } }];
+  });
+  if (updates.length > 0) await PaymentEntry.bulkWrite(updates, session ? { session } : {});
+
+  if (adapter.afterPayment) await adapter.afterPayment(doc, session);
+}
+
+export interface CorrectPaymentInput {
   merchantId: Types.ObjectId;
   paymentId: string;
+  /** The right amount. Omitted when only the descriptive fields change. */
+  amountMinor?: number;
   reference?: string | null;
   paidAt?: Date;
   notes?: string | null;
+  /** Why the amount was wrong, kept in the audit trail. */
+  reason?: string | null;
   actor: PaymentActor;
   req?: Request;
 }
 
 /**
- * Corrects the descriptive fields of a payment entry.
+ * Fixes a payment that was entered with the wrong amount.
  *
- * Entries stay append-only where it counts: the **amount, the method, the payable and the
- * balance it left behind can never change**, because a total has to remain explainable by
- * the sum of its entries and a history that can be rewritten is not a history. What can be
- * corrected is what the entry *says about itself* — a mistyped cheque number, a note, or
- * the date the money actually changed hands. None of those move a rupee.
- *
- * A wrong amount is not fixed here. It is fixed by a further entry, and refunds and credit
- * notes arrive in Phase 5.
+ * The entry keeps its identity, method, date and instalment; only the money changes,
+ * and the payable is rebuilt from its ledger in the same transaction. The new total may
+ * not exceed what the payable is for, and a cancelled payable can only be corrected
+ * downwards — recording more money against it would be a new payment, which it no
+ * longer accepts. The old and new amounts are kept in the audit trail.
  */
-export async function annotatePayment(
-  input: AnnotatePaymentInput,
-): Promise<PaymentEntryDocument> {
-  if (!Types.ObjectId.isValid(input.paymentId)) {
-    throw AppError.notFound('That payment was not found.');
+export async function correctPayment(
+  input: CorrectPaymentInput,
+): Promise<{ entry: PaymentEntryDocument; payable: PayableSummary }> {
+  const amountMinor = input.amountMinor;
+  if (amountMinor !== undefined && (!Number.isInteger(amountMinor) || amountMinor <= 0)) {
+    throw AppError.validation('Please correct the highlighted fields.', [
+      { field: 'amountMinor', message: 'Enter an amount greater than zero.' },
+    ]);
   }
 
-  const entry = await PaymentEntry.findOne({
-    _id: input.paymentId,
-    merchantId: input.merchantId,
+  const outcome = await withTransaction(async (session) => {
+    const entry = await loadEntry(input.merchantId, input.paymentId, session);
+    const adapter = adapterFor(entry.payableType);
+    const doc = await adapter.load({
+      merchantId: input.merchantId,
+      payableId: String(entry.payableId),
+      session,
+    });
+    const before = adapter.snapshot(doc);
+
+    const fromMinor = entry.amountMinor;
+    const toMinor = amountMinor ?? fromMinor;
+    const increase = toMinor - fromMinor;
+
+    if (increase > 0 && before.cancelled) {
+      throw AppError.conflict(
+        'This record was cancelled, so a payment against it can only be lowered or deleted.',
+      );
+    }
+    if (increase > 0 && before.paidMinor + increase > before.totalMinor) {
+      const most = fromMinor + outstandingMinor(before.totalMinor, before.paidMinor);
+      throw new AppError(
+        409,
+        ErrorCode.CONFLICT,
+        `That would be more than the total of ${describeMoneyMinor(before.totalMinor)}. ` +
+          `This payment can be at most ${describeMoneyMinor(most)}.`,
+        { meta: { maxAmountMinor: most, total: before.totalMinor, paid: before.paidMinor } },
+      );
+    }
+
+    const set: Record<string, unknown> = {};
+    if (increase !== 0) set.amountMinor = toMinor;
+    if (input.reference !== undefined) set.reference = input.reference;
+    if (input.notes !== undefined) set.notes = input.notes;
+    if (input.paidAt !== undefined) set.paidAt = input.paidAt;
+    const detailsBefore = {
+      reference: entry.reference ?? null,
+      paidAt: entry.paidAt.toISOString(),
+      notes: entry.notes ?? null,
+    };
+
+    if (Object.keys(set).length > 0) {
+      await PaymentEntry.updateOne({ _id: entry._id }, { $set: set }, session ? { session } : {});
+    }
+    if (increase !== 0) await rebuildFromLedger(adapter, doc, entry.payableType, session);
+
+    const updated = await loadEntry(input.merchantId, input.paymentId, session);
+    return { entry: updated, after: adapter.snapshot(doc), before, fromMinor, toMinor, detailsBefore };
   });
-  if (!entry) throw AppError.notFound('That payment was not found.');
 
-  const before = {
-    reference: entry.reference ?? null,
-    paidAt: entry.paidAt.toISOString(),
-    notes: entry.notes ?? null,
-  };
-
-  // Presence, not truthiness: an explicit null is how a reference or a note is cleared.
-  if (input.reference !== undefined) entry.reference = input.reference;
-  if (input.notes !== undefined) entry.notes = input.notes;
-  if (input.paidAt !== undefined) entry.paidAt = input.paidAt;
-
-  await entry.save();
+  const { entry, after, before, fromMinor, toMinor, detailsBefore } = outcome;
+  const reason = input.reason?.trim() || null;
 
   await writeAudit({
     actorType: input.actor.type,
     actorId: input.actor.id ?? null,
     actorLabel: input.actor.label,
-    action: 'payment.annotated',
+    action: fromMinor === toMinor ? 'payment.annotated' : 'payment.corrected',
     targetType: entry.payableType,
     targetId: entry.payableId,
     summary:
-      `Corrected the details of a ${describeMoneyMinor(entry.amountMinor)} payment on ` +
-      `${entry.payableReference}. The amount was not changed.`,
+      fromMinor === toMinor
+        ? `Corrected the details of a ${describeMoneyMinor(toMinor)} payment on ${entry.payableReference}. ` +
+          'The amount was not changed.'
+        : `Changed a payment on ${entry.payableReference} from ${describeMoneyMinor(fromMinor)} to ` +
+          `${describeMoneyMinor(toMinor)}; ${describeMoneyMinor(outstandingMinor(after.totalMinor, after.paidMinor))} ` +
+          `outstanding.${reason ? ` Reason: ${reason}` : ''}`,
     changes: [
-      { field: 'reference', from: before.reference, to: entry.reference ?? null },
-      { field: 'paidAt', from: before.paidAt, to: entry.paidAt.toISOString() },
-      { field: 'notes', from: before.notes, to: entry.notes ?? null },
+      { field: 'amountMinor', from: fromMinor, to: toMinor },
+      { field: 'paidMinor', from: before.paidMinor, to: after.paidMinor },
+      { field: 'reference', from: detailsBefore.reference, to: entry.reference ?? null },
+      { field: 'paidAt', from: detailsBefore.paidAt, to: entry.paidAt.toISOString() },
+      { field: 'notes', from: detailsBefore.notes, to: entry.notes ?? null },
     ].filter((change) => change.from !== change.to),
+    metadata: { paymentId: String(entry._id), method: entry.method, reason },
     req: input.req,
   });
 
-  return entry;
+  return { entry, payable: summarise(entry.payableType, after) };
+}
+
+export interface DeletePaymentInput {
+  merchantId: Types.ObjectId;
+  paymentId: string;
+  /** Why it was removed, kept in the audit trail. */
+  reason?: string | null;
+  actor: PaymentActor;
+  req?: Request;
+}
+
+/**
+ * Removes a payment that should never have been recorded — a duplicate, or one against
+ * the wrong order. The payable is rebuilt from the entries that remain, in the same
+ * transaction, and the audit trail keeps a full copy of what was removed.
+ */
+export async function deletePayment(
+  input: DeletePaymentInput,
+): Promise<{ payment: PaymentEntryDocument; payable: PayableSummary }> {
+  const outcome = await withTransaction(async (session) => {
+    const entry = await loadEntry(input.merchantId, input.paymentId, session);
+    const adapter = adapterFor(entry.payableType);
+    const doc = await adapter.load({
+      merchantId: input.merchantId,
+      payableId: String(entry.payableId),
+      session,
+    });
+    const before = adapter.snapshot(doc);
+
+    await PaymentEntry.deleteOne({ _id: entry._id }, session ? { session } : {});
+    await rebuildFromLedger(adapter, doc, entry.payableType, session);
+
+    return { entry, before, after: adapter.snapshot(doc) };
+  });
+
+  const { entry, before, after } = outcome;
+  const reason = input.reason?.trim() || null;
+
+  await writeAudit({
+    actorType: input.actor.type,
+    actorId: input.actor.id ?? null,
+    actorLabel: input.actor.label,
+    action: 'payment.deleted',
+    targetType: entry.payableType,
+    targetId: entry.payableId,
+    summary:
+      `Deleted a ${describeMoneyMinor(entry.amountMinor)} ${entry.method} payment on ${entry.payableReference}; ` +
+      `${describeMoneyMinor(outstandingMinor(after.totalMinor, after.paidMinor))} outstanding.` +
+      (reason ? ` Reason: ${reason}` : ''),
+    changes: [{ field: 'paidMinor', from: before.paidMinor, to: after.paidMinor }],
+    metadata: {
+      reason,
+      // A full copy, so a deleted payment can always be accounted for later.
+      payment: {
+        id: String(entry._id),
+        amountMinor: entry.amountMinor,
+        method: entry.method,
+        reference: entry.reference ?? null,
+        paidAt: entry.paidAt.toISOString(),
+        notes: entry.notes ?? null,
+        installmentNumber: entry.installmentNumber ?? null,
+        recordedBy: entry.actorLabel,
+        recordedAt: entry.createdAt.toISOString(),
+      },
+    },
+    req: input.req,
+  });
+
+  return { payment: entry, payable: summarise(entry.payableType, after) };
 }
 
 export const PAYMENT_SORT_FIELDS = ['paidAt', 'amountMinor', 'createdAt'] as const;

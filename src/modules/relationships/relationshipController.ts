@@ -6,7 +6,8 @@ import { buildPageMeta, sendData, sendList } from '../../utils/response';
 import type { AuthenticatedMerchant } from '../../types/express';
 import type { StockActor } from '../catalog/stockService';
 import {
-  annotatePayment,
+  correctPayment,
+  deletePayment,
   listPayments,
   PAYMENT_SORT_FIELDS,
   recordPayment,
@@ -360,22 +361,55 @@ export async function postPurchasePayment(req: Request, res: Response): Promise<
  * Not its amount: the route's validator refuses one outright, so a client cannot even
  * attempt it by accident.
  */
-export async function patchPayment(req: Request, res: Response): Promise<void> {
-  const merchant = merchantContext(req);
-  const body = req.body as Record<string, unknown>;
-
-  const entry = await annotatePayment({
-    merchantId: merchant.objectId,
-    paymentId: req.params.id!,
+/** The fields a correction carries, read the same way for merchants and admins. */
+export function readPaymentCorrection(body: Record<string, unknown>) {
+  return {
+    ...(body.amountMinor !== undefined ? { amountMinor: Number(body.amountMinor) } : {}),
     // Presence checks, so an explicit null clears a field rather than being ignored.
     ...('reference' in body ? { reference: optionalString(body.reference) ?? null } : {}),
     ...('notes' in body ? { notes: optionalString(body.notes) ?? null } : {}),
     ...(optionalDate(body.paidAt) ? { paidAt: optionalDate(body.paidAt)! } : {}),
+    ...('reason' in body ? { reason: optionalString(body.reason) ?? null } : {}),
+  };
+}
+
+/** Why a payment is being deleted, from the body or, for clients that cannot send a DELETE body, the query. */
+export function readDeleteReason(req: Request): string | null {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  return optionalString(body.reason) ?? optionalString(req.query.reason) ?? null;
+}
+
+/**
+ * Corrects a payment. Sending `amountMinor` fixes a wrong amount and rebuilds the
+ * order or purchase from its payments; the other fields only describe the entry.
+ */
+export async function patchPayment(req: Request, res: Response): Promise<void> {
+  const merchant = merchantContext(req);
+
+  const { entry, payable } = await correctPayment({
+    merchantId: merchant.objectId,
+    paymentId: req.params.id!,
+    ...readPaymentCorrection(req.body as Record<string, unknown>),
     actor: merchantActor(req),
     req,
   });
 
-  sendData(res, { payment: presentPaymentEntry(entry) });
+  sendData(res, { payment: presentPaymentEntry(entry), payable });
+}
+
+/** Deletes a payment recorded by mistake, and rebuilds what it was paid against. */
+export async function destroyPayment(req: Request, res: Response): Promise<void> {
+  const merchant = merchantContext(req);
+
+  const { payment, payable } = await deletePayment({
+    merchantId: merchant.objectId,
+    paymentId: req.params.id!,
+    reason: readDeleteReason(req),
+    actor: merchantActor(req),
+    req,
+  });
+
+  sendData(res, { deleted: true, payment: presentPaymentEntry(payment), payable });
 }
 
 export async function getPayments(req: Request, res: Response): Promise<void> {

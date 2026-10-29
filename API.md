@@ -308,6 +308,16 @@ while the account holds a password set by somebody else (see
 | `GET` | `/admin/stock-movements` | `stock.view` | Stock ledger across merchants |
 | `GET` | `/admin/low-stock` | `stock.view` | Low-stock records across merchants |
 | `POST` | `/admin/stock/:subjectType/:subjectId/adjust` | `stock.adjust` | Adjust stock on a merchant's behalf |
+| `PUT` | `/admin/stock/:subjectType/:subjectId/quantity` | `stock.adjust` | Set stock to a counted figure (a recount) |
+| `POST` | `/admin/merchants/:merchantId/items` | `item.manage` | Create a product for a merchant |
+| `POST` | `/admin/merchants/:merchantId/services` | `service.manage` | Create a service for a merchant |
+| `POST` | `/admin/merchants/:merchantId/materials` | `material.manage` | Create a raw material for a merchant |
+| `POST` | `/admin/merchants/:merchantId/categories` | manage permission for the `kind` | Create a category |
+| `PATCH` | `/admin/categories/:id` | manage permission for its kind | Rename a category |
+| `POST` | `/admin/categories/:id/archive` · `/restore` | manage permission for its kind | Archive or restore a category |
+| `POST` | `/admin/{items,services,materials}/:id/images` | `*.manage` | Upload photos (multipart, field `images`) |
+| `PUT` | `/admin/{items,services,materials}/:id/images/order` | `*.manage` | Reorder photos; the first is the cover |
+| `DELETE` | `/admin/{items,services,materials}/:id/images/:imageId` | `*.manage` | Remove a photo |
 | `GET` | `/admin/customers` | `customer.view` | Customers across merchants |
 | `GET` | `/admin/customers/:id` | `customer.view` | One customer |
 | `PATCH` | `/admin/customers/:id` | `customer.edit` | Edit a customer |
@@ -323,15 +333,25 @@ while the account holds a password set by somebody else (see
 | `POST` | `/admin/purchases/:id/cancel` | `purchase.manage` | Cancel a purchase |
 | `POST` | `/admin/purchases/:id/payments` | `payment.manage` | Record a supplier payment |
 | `GET` | `/admin/payments` | `payment.view` | Payment entries across merchants |
-| `PATCH` | `/admin/payments/:id` | `payment.manage` | Correct reference, date or notes |
+| `PATCH` | `/admin/payments/:id` | `payment.manage` | Correct a payment: its amount, reference, date or notes |
+| `DELETE` | `/admin/payments/:id` | `payment.manage` | Delete a payment recorded by mistake |
 | `GET` | `/admin/orders` | `order.view` | Orders across merchants |
 | `GET` | `/admin/orders/:id` | `order.view` | One order |
 | `POST` | `/admin/orders/:id/status` | `order.edit` | Move an order on (not to `cancelled`) |
+| `PATCH` | `/admin/orders/:id/delivery` | `order.edit` | Change the delivery date, time or location |
 | `POST` | `/admin/orders/:id/cancel` | `order.cancel` | Cancel an order |
 | `POST` | `/admin/orders/:id/payments` | `payment.manage` | Record a customer payment |
 | `PUT` | `/admin/orders/:id/installments` | `installment.manage` | Set an instalment plan |
 | `GET` | `/admin/installments` | `installment.view` | Instalments across merchants |
 | `GET` | `/admin/receivables` | `payment.view` | Receivables rolled up per merchant |
+
+**Acting for a merchant on the catalog.** Every create and edit above takes exactly the
+body the merchant app sends to the matching merchant endpoint (`POST /items`,
+`PATCH /items/:id`, `POST /categories`, `PUT /stock/…/quantity`, the image endpoints) and
+runs through the same service, so the same validation, limits and stock ledger apply. The
+owning merchant is the one in the URL for a create, and the record's own merchant for
+everything else. Each change is audited with the admin as the actor, so the merchant can see
+that support made it.
 
 ---
 
@@ -1171,36 +1191,73 @@ its entries by a stray sign.
 reads on its own. `actorType` is `merchant` or `admin`, so a client can tell the merchant
 when support recorded a payment on their behalf.
 
-### `PATCH /api/v1/payments/:id`
+### `PATCH /api/v1/payments/:id` — correct a payment
+
+Fix a payment entered with the wrong amount, and/or what the entry says about itself:
+
+```json
+{ "amountMinor": 30000, "reason": "Typed 40,000 instead of 30,000" }
+```
 
 ```json
 { "reference": "CHQ-00012", "paidAt": "2026-10-02T00:00:00.000Z", "notes": "Cheque number was wrong" }
 ```
 
-Corrects what an entry **says about itself**. `200` returns `{ payment }`.
+All fields are optional: `amountMinor` (whole paise, at least 1), `reference`, `paidAt`,
+`notes` and `reason` (up to 300 characters, kept in the audit trail). An explicit `null`
+clears `reference` or `notes`. **`method` is still `422`** — the payment method cannot change.
 
-**Sending `amountMinor` or `method` is `422`**, not ignored: a client that sends one has
-misunderstood something, and silently dropping it would let them believe the correction had
-been applied.
+`200`
 
-An explicit `null` clears `reference` or `notes`. A corrected `paidAt` moves the payment into
-a different period, which the dashboard and the `from`/`to` filters count over — that is the
-point of being able to correct it.
+```json
+{
+  "data": {
+    "payment": PaymentEntryView,
+    "payable": {
+      "type": "order", "id": "6720…", "reference": "ORD-0042",
+      "totalMinor": 100000, "paidMinor": 30000, "outstandingMinor": 70000,
+      "paymentStatus": "partially_paid"
+    }
+  }
+}
+```
 
-Every correction is audited as `payment.annotated`, and the summary says the amount was not
-changed, so the trail cannot be mistaken for one.
+When the amount changes, the order or purchase is **rebuilt from its payments** in the
+same transaction: `paidMinor`, `paymentStatus`, the instalment plan (payments are replayed
+into it in the order they were recorded) and every entry's `balanceAfterMinor`. The
+customer's or supplier's outstanding total follows. Use `payable` to redraw the screen,
+and reload the payment list, since other rows' `balanceAfterMinor` may have changed.
 
-**Payment entries are append-only where money is concerned.** The amount, the method, the
-payable, the direction, the balance it left behind and who recorded it can never change —
-a total has to stay explainable by the sum of its entries, and a history whose amounts can be
-rewritten is not a history. The guard is on the model, not only the route, so a future caller
-that bypassed the route is still stopped.
+Refused with `409 CONFLICT`:
 
-What an entry says about itself is not money: a mistyped cheque number, a note, or the date
-the money actually changed hands. Guarding those as well would leave a merchant with a
-permanently wrong reference and no way to fix it, which is a worse record rather than a safer
-one. A wrong **amount** is still corrected by a further entry, and refunds and credits arrive
-with returns in Phase 5.
+| Situation | `meta` |
+|---|---|
+| The new amount would take the total paid past the order or purchase total | `maxAmountMinor`, `total`, `paid` |
+| Raising a payment on a cancelled order or purchase (lowering or deleting is allowed) | — |
+
+Audited as `payment.corrected` with the old and new amounts and the reason. A change that
+leaves the amount alone is audited as `payment.annotated`, as before.
+
+### `DELETE /api/v1/payments/:id` — delete a payment recorded by mistake
+
+For a duplicate, or a payment recorded against the wrong order. An optional `reason` can
+be sent in the JSON body or as `?reason=` (for clients that cannot send a body with DELETE).
+
+`200` `{ "data": { "deleted": true, "payment": PaymentEntryView, "payable": {…} } }` —
+`payment` is what was removed, `payable` is the same summary as above. The payable is
+rebuilt from the payments that remain, exactly as for a correction. Audited as
+`payment.deleted`, with a full copy of the removed payment in the audit metadata.
+
+### Admin
+
+`PATCH /api/v1/admin/payments/:id` and `DELETE /api/v1/admin/payments/:id` take the same
+bodies and return the same responses, need `payment.manage`, and are recorded with the
+admin as the actor — so the merchant can see in the order activity that support made the change.
+
+**Why money is still guarded on the model.** A payable's paid total must equal the sum of its
+entries. A plain `save()` that changes an entry's amount is still refused by the model;
+corrections go only through the payment engine, which changes the entry and rebuilds the
+payable together, and leaves an audit record of both amounts.
 
 ---
 
@@ -1223,7 +1280,10 @@ The sale itself: items, services or both, for a named customer or for nobody.
   "status": "confirmed",
   "orderDate": "2026-10-05T00:00:00.000Z",
   "dueDate": "2026-10-19T00:00:00.000Z",
-  "notes": "Deliver after 6pm"
+  "notes": "Ring the bell twice",
+  "deliveryDate": "2026-10-07",
+  "deliveryTime": "18:30",
+  "deliveryLocation": "12 MG Road, Indiranagar, Bengaluru 560038"
 }
 ```
 
@@ -1231,6 +1291,16 @@ The sale itself: items, services or both, for a named customer or for nobody.
 (PRD section 8), and the receivables screen names it "Walk-in sale" rather than leaving a
 blank cell. `status` defaults to `confirmed` and may be `draft` for a held order or quote;
 an order **cannot be created as `cancelled` or `returned`**.
+
+**Delivery details** are three separate, optional fields, each clearable with `null`:
+
+| Field | Format | Notes |
+|---|---|---|
+| `deliveryDate` | `YYYY-MM-DD` | A calendar day. A full ISO timestamp is accepted and only its date part is kept, so the day never shifts with time zones. |
+| `deliveryTime` | `HH:mm`, 24-hour | For example `09:00` or `18:30`. `2:30 PM` and `24:00` are `422`. |
+| `deliveryLocation` | text, up to 500 characters | The address as the merchant writes it. |
+
+`GET /api/v1/orders` accepts `sort=deliveryDate` (or `-deliveryDate`).
 
 `unitRateMinor` on a line overrides the catalog price for that sale only. Omitted, the
 item's selling price or the service's rate is used. `durationMinutes` is kept only for
@@ -1309,7 +1379,9 @@ than by merchant, so the ownership check *is* the scope. Another merchant's orde
 **Only a draft may have its lines or totals changed** — `409` with `meta: { status }`
 otherwise. Once stock has moved and payments may have landed, the lines are history;
 "cancel it and write a new one" is a path a merchant can understand and verify. Notes, the
-due date, the order date and the customer stay editable throughout.
+due date, the order date, the customer and the **delivery date, time and location** stay
+editable throughout, whatever the status. A change to the delivery fields is audited with
+their old and new values.
 
 Repricing a draft **clears any instalment plan**, because a plan built against the old
 total no longer adds up.
@@ -1396,6 +1468,9 @@ purchase. `installmentNumber` is optional — see allocation below.
   "returnedAt": null,
   "returnedReason": null,
   "notes": null,
+  "deliveryDate": "2026-10-07",
+  "deliveryTime": "18:30",
+  "deliveryLocation": "12 MG Road, Indiranagar, Bengaluru 560038",
   "paymentStatus": "unpaid",
   "paymentState": "unpaid",
   "installments": [],
@@ -1811,14 +1886,14 @@ merchant does, and the merchant can see who changed it.
 | `GET /admin/payments` | `payment.view` |
 | `GET /admin/merchants/:merchantId/relationship-summary` | `merchant.view` |
 | `GET /admin/orders` · `GET /admin/orders/:id` | `order.view` |
-| `POST /admin/orders/:id/status` | `order.edit` |
+| `POST /admin/orders/:id/status` · `PATCH /admin/orders/:id/delivery` | `order.edit` |
 | `POST /admin/orders/:id/cancel` | `order.cancel` |
 | `POST /admin/orders/:id/payments` | `payment.manage` |
 | `PUT /admin/orders/:id/installments` | `installment.manage` |
 | `GET /admin/installments` | `installment.view` |
 | `GET /admin/receivables` | `payment.view` |
 | `GET /admin/merchants/:merchantId/order-summary` | `order.view` |
-| `PATCH /admin/payments/:id` | `payment.manage` |
+| `PATCH /admin/payments/:id` · `DELETE /admin/payments/:id` | `payment.manage` |
 
 The lists span every merchant and take an optional `merchantId` to drill into one. Each
 row carries `merchantId` and `merchantName` so a cross-merchant list is readable.

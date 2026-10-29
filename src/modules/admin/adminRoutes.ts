@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { param } from 'express-validator';
 import { PERMISSIONS } from '../../config/permissions';
 import { authenticateAdmin, requirePasswordChanged, requirePermission } from '../../middleware/auth';
 import { adminLoginLimiter, refreshLimiter } from '../../middleware/rateLimit';
@@ -57,14 +58,17 @@ import {
   getAdminReceivables,
   postAdminOrderCancel,
   postAdminOrderPayment,
+  patchAdminOrderDelivery,
   patchAdminPayment,
+  deleteAdminPayment,
   postAdminOrderStatus,
   putAdminInstallmentPlan,
 } from './adminOrderController';
-import { installmentPlanRules, orderPaymentRules } from '../orders/orderValidators';
+import { installmentPlanRules, orderDeliveryRules, orderPaymentRules } from '../orders/orderValidators';
 import {
   customerUpdateRules,
   paymentAnnotateRules,
+  paymentDeleteRules,
   paymentCreateRules,
   supplierUpdateRules,
 } from '../relationships/relationshipValidators';
@@ -91,12 +95,41 @@ import {
 } from './adminCatalogController';
 import {
   businessUpdateRules,
+  categoryCreateRules,
+  categoryIdRules,
+  categoryRenameRules,
+  itemCreateRules,
+  itemIdRules,
+  itemImageOrderRules,
+  itemImageRules,
   itemUpdateRules,
+  materialCreateRules,
+  materialIdRules,
+  materialImageOrderRules,
+  materialImageRules,
   materialUpdateRules,
   rejectDirectStockWrite,
+  serviceCreateRules,
+  serviceIdRules,
+  serviceImageOrderRules,
+  serviceImageRules,
   serviceUpdateRules,
   stockAdjustRules,
+  stockSetRules,
 } from '../catalog/catalogValidators';
+import {
+  adminCategoryArchiveHandler,
+  adminItemImages,
+  adminMaterialImages,
+  adminServiceImages,
+  patchAdminCategory,
+  postAdminCategory,
+  postAdminItem,
+  postAdminMaterial,
+  postAdminService,
+  putAdminStockQuantity,
+} from './adminCatalogWriteController';
+import { uploadImages } from '../../middleware/upload';
 import {
   adminCatalogListRules,
   adminInstallmentListRules,
@@ -465,6 +498,77 @@ adminRouter.post(
   asyncHandler(postAdminStockAdjustment),
 );
 
+/* Setting stock to a counted figure, as the merchant app's recount does. */
+adminRouter.put(
+  '/stock/:subjectType/:subjectId/quantity',
+  requirePermission(PERMISSIONS.STOCK_ADJUST),
+  ...validate(stockSetRules),
+  asyncHandler(putAdminStockQuantity),
+);
+
+/*
+ * Creating catalog records on a merchant's behalf. The merchant is named in the URL,
+ * the body is exactly what the merchant app sends, and the same service writes it.
+ */
+const merchantParam = param('merchantId').isMongoId().withMessage('That merchant was not found.');
+
+adminRouter.post(
+  '/merchants/:merchantId/items',
+  requirePermission(PERMISSIONS.ITEM_MANAGE),
+  ...validate([merchantParam, ...itemCreateRules]),
+  asyncHandler(postAdminItem),
+);
+adminRouter.post(
+  '/merchants/:merchantId/services',
+  requirePermission(PERMISSIONS.SERVICE_MANAGE),
+  ...validate([merchantParam, ...serviceCreateRules]),
+  asyncHandler(postAdminService),
+);
+adminRouter.post(
+  '/merchants/:merchantId/materials',
+  requirePermission(PERMISSIONS.MATERIAL_MANAGE),
+  ...validate([merchantParam, ...materialCreateRules]),
+  asyncHandler(postAdminMaterial),
+);
+
+/* Categories: managed with the permission for the kind of record they file. */
+adminRouter.post(
+  '/merchants/:merchantId/categories',
+  ...validate([merchantParam, ...categoryCreateRules]),
+  asyncHandler(postAdminCategory),
+);
+adminRouter.patch('/categories/:id', ...validate(categoryRenameRules), asyncHandler(patchAdminCategory));
+adminRouter.post('/categories/:id/archive', ...validate(categoryIdRules), asyncHandler(adminCategoryArchiveHandler(true)));
+adminRouter.post('/categories/:id/restore', ...validate(categoryIdRules), asyncHandler(adminCategoryArchiveHandler(false)));
+
+/* Photo galleries, on the merchant's behalf. */
+const galleries = [
+  { path: 'items', permission: PERMISSIONS.ITEM_MANAGE, handlers: adminItemImages, imageRules: itemImageRules, orderRules: itemImageOrderRules, idRules: itemIdRules },
+  { path: 'services', permission: PERMISSIONS.SERVICE_MANAGE, handlers: adminServiceImages, imageRules: serviceImageRules, orderRules: serviceImageOrderRules, idRules: serviceIdRules },
+  { path: 'materials', permission: PERMISSIONS.MATERIAL_MANAGE, handlers: adminMaterialImages, imageRules: materialImageRules, orderRules: materialImageOrderRules, idRules: materialIdRules },
+];
+for (const gallery of galleries) {
+  adminRouter.post(
+    `/${gallery.path}/:id/images`,
+    requirePermission(gallery.permission),
+    uploadImages.array('images'),
+    ...validate(gallery.idRules),
+    asyncHandler(gallery.handlers.upload),
+  );
+  adminRouter.put(
+    `/${gallery.path}/:id/images/order`,
+    requirePermission(gallery.permission),
+    ...validate(gallery.orderRules),
+    asyncHandler(gallery.handlers.reorder),
+  );
+  adminRouter.delete(
+    `/${gallery.path}/:id/images/:imageId`,
+    requirePermission(gallery.permission),
+    ...validate(gallery.imageRules),
+    asyncHandler(gallery.handlers.remove),
+  );
+}
+
 
 /* --------------------- Phase 3: customers, suppliers, purchases -------------------- */
 
@@ -574,12 +678,20 @@ adminRouter.get(
   asyncHandler(getAdminPayments),
 );
 
-/* Corrects what an entry says about itself; the amount is refused by the validator. */
+/* Corrects a payment, including a wrong amount; the payable is rebuilt from its ledger. */
 adminRouter.patch(
   '/payments/:id',
   requirePermission(PERMISSIONS.PAYMENT_MANAGE),
   ...validate(paymentAnnotateRules),
   asyncHandler(patchAdminPayment),
+);
+
+/* Deletes a payment recorded by mistake. */
+adminRouter.delete(
+  '/payments/:id',
+  requirePermission(PERMISSIONS.PAYMENT_MANAGE),
+  ...validate(paymentDeleteRules),
+  asyncHandler(deleteAdminPayment),
 );
 
 adminRouter.get(
@@ -603,6 +715,14 @@ adminRouter.get(
   requirePermission(PERMISSIONS.ORDER_VIEW),
   ...validate(itemIdParamRules),
   asyncHandler(getAdminOrderById),
+);
+
+/* Delivery date, time and location only; lines and totals stay the merchant's. */
+adminRouter.patch(
+  '/orders/:id/delivery',
+  requirePermission(PERMISSIONS.ORDER_EDIT),
+  ...validate(orderDeliveryRules),
+  asyncHandler(patchAdminOrderDelivery),
 );
 
 adminRouter.post(

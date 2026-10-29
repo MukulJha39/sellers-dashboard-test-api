@@ -3,7 +3,7 @@ import type { AuditLogDocument } from '../../models/AuditLog';
 import type { OrderDocument, OrderInstallment } from '../../models/Order';
 import { fromThousandths } from '../../utils/quantity';
 import { derivePaymentState, outstandingMinor } from '../payments/paymentEngine';
-import { nextDueInstallment } from './orderService';
+import { deliveryView, nextDueInstallment } from './orderService';
 
 /**
  * API views for orders and their installment plans.
@@ -88,6 +88,9 @@ export function presentOrder(order: OrderDocument, now: Date = new Date()) {
     returnedReason: order.returnedReason ?? null,
 
     notes: order.notes ?? null,
+
+    /** `YYYY-MM-DD`, `HH:mm` and free text; each null when not set. */
+    ...deliveryView(order),
 
     paymentStatus: order.paymentStatus,
     /**

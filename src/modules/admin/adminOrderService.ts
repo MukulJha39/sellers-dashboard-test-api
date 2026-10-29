@@ -25,7 +25,7 @@ function requireMerchantId(value: string): Types.ObjectId {
   return new Types.ObjectId(value);
 }
 
-export const ADMIN_ORDER_SORT_FIELDS = ['orderDate', 'createdAt', 'totalMinor', 'dueDate'] as const;
+export const ADMIN_ORDER_SORT_FIELDS = ['orderDate', 'createdAt', 'totalMinor', 'dueDate', 'deliveryDate'] as const;
 
 export interface AdminOrderFilters {
   merchantId?: string;

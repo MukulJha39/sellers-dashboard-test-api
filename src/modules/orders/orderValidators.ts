@@ -56,6 +56,27 @@ function optionalDateField(field: string): ValidationChain {
   return body(field).optional({ values: 'null' }).isISO8601().withMessage('Enter a valid date.');
 }
 
+/** A calendar day, `YYYY-MM-DD`. A full ISO timestamp is accepted and its date part kept. */
+const DELIVERY_DATE = /^\d{4}-\d{2}-\d{2}(T.*)?$/;
+/** 24-hour time, `HH:mm`. */
+export const DELIVERY_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/** Delivery date, time and location: each optional, each clearable with null. */
+export const deliveryRules: ValidationChain[] = [
+  body('deliveryDate')
+    .optional({ values: 'null' })
+    .custom((value: unknown) => typeof value === 'string' && DELIVERY_DATE.test(value) && !Number.isNaN(Date.parse(value.slice(0, 10))))
+    .withMessage('Enter the delivery date as YYYY-MM-DD.'),
+  body('deliveryTime')
+    .optional({ values: 'null' })
+    .isString()
+    .bail()
+    .trim()
+    .matches(DELIVERY_TIME)
+    .withMessage('Enter the delivery time as HH:mm, for example 14:30.'),
+  optionalTextField('deliveryLocation', 500),
+];
+
 export const orderIdRules: ValidationChain[] = [
   param('id').isMongoId().withMessage('That order was not found.'),
 ];
@@ -70,6 +91,7 @@ const orderFieldRules: ValidationChain[] = [
   optionalDateField('orderDate'),
   optionalDateField('dueDate'),
   optionalTextField('notes', 2000),
+  ...deliveryRules,
 ];
 
 const lineRules: ValidationChain[] = [
@@ -178,4 +200,16 @@ export const installmentListRules: ValidationChain[] = [
   query('overdue').optional({ values: 'falsy' }).isBoolean().toBoolean(),
   query('withinDays').optional({ values: 'falsy' }).isInt({ min: 1, max: 365 }).toInt(),
   query('limit').optional({ values: 'falsy' }).isInt({ min: 1, max: 100 }).toInt(),
+];
+
+/** Admin: change only an order's delivery details. */
+export const orderDeliveryRules: ValidationChain[] = [
+  ...orderIdRules,
+  ...deliveryRules,
+  body().custom((value: Record<string, unknown>) => {
+    if (!['deliveryDate', 'deliveryTime', 'deliveryLocation'].some((field) => field in (value ?? {}))) {
+      throw new Error('Send deliveryDate, deliveryTime or deliveryLocation.');
+    }
+    return true;
+  }),
 ];

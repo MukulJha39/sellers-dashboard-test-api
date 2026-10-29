@@ -778,23 +778,20 @@ describe('correcting a payment entry', () => {
     expect(response.body.data.payment.method).toBe('cheque');
   });
 
-  it('refuses an attempt to change the amount rather than ignoring it', async () => {
-    const { token, payment } = await paidOrder();
+  it('changes a wrong amount and brings the order back in line', async () => {
+    const { token, order, payment } = await paidOrder();
 
     const response = await request(app())
       .patch(`${API}/payments/${payment.id}`)
       .set(...auth(token))
-      .send({ amountMinor: 999_999 });
+      .send({ amountMinor: 3_000, reason: 'Typed 4000 instead of 3000' });
 
-    expect(response.status).toBe(422);
-    expect(response.body.error.details[0].message).toContain('cannot be changed');
+    expect(response.status).toBe(200);
+    expect(response.body.data.payment.amountMinor).toBe(3_000);
+    expect(response.body.data.payable).toMatchObject({ paidMinor: 3_000, outstandingMinor: 7_000 });
 
-    // Nothing moved, and the order still agrees with its entries.
-    const unchanged = await request(app())
-      .get(`${API}/payments`)
-      .query({ payableType: 'order', payableId: payment.payableId })
-      .set(...auth(token));
-    expect(unchanged.body.data.items[0].amountMinor).toBe(4_000);
+    const after = await readOrder(token, order.id);
+    expect(after.paidMinor).toBe(3_000);
   });
 
   it('refuses an attempt to change the method', async () => {

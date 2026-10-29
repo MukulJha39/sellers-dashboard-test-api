@@ -8,11 +8,13 @@ import { parsePagination, parseSort } from '../../utils/pagination';
 import { buildPageMeta, sendData, sendList } from '../../utils/response';
 import type { AuthenticatedAdmin } from '../../types/express';
 import type { StockActor } from '../catalog/stockService';
-import { annotatePayment, recordPayment } from '../payments/paymentEngine';
+import { correctPayment, deletePayment, recordPayment } from '../payments/paymentEngine';
+import { readDeleteReason, readPaymentCorrection } from '../relationships/relationshipController';
 import { presentOrder } from '../orders/orderPresenters';
 import {
   setInstallmentPlan,
   transitionOrder,
+  updateOrder,
   type InstallmentInput,
 } from '../orders/orderService';
 import { presentPaymentEntry } from '../relationships/relationshipPresenters';
@@ -163,6 +165,29 @@ export async function postAdminOrderCancel(req: Request, res: Response): Promise
   sendData(res, { order: presentOrder(updated) });
 }
 
+/**
+ * Changes only an order's delivery date, time and location, on the merchant's behalf.
+ * Goes through the same update the merchant app uses, so it is audited the same way.
+ */
+export async function patchAdminOrderDelivery(req: Request, res: Response): Promise<void> {
+  const order = await adminLoadOrder(req.params.id!);
+  const body = req.body as Record<string, unknown>;
+
+  const updated = await updateOrder({
+    merchantId: order.merchantId,
+    orderId: String(order._id),
+    data: {
+      ...('deliveryDate' in body ? { deliveryDate: (body.deliveryDate as string | null) ?? null } : {}),
+      ...('deliveryTime' in body ? { deliveryTime: (body.deliveryTime as string | null) ?? null } : {}),
+      ...('deliveryLocation' in body ? { deliveryLocation: (body.deliveryLocation as string | null) ?? null } : {}),
+    },
+    actor: adminActor(req),
+    req,
+  });
+
+  sendData(res, { order: presentOrder(updated) });
+}
+
 export async function postAdminOrderPayment(req: Request, res: Response): Promise<void> {
   const order = await adminLoadOrder(req.params.id!);
   const body = req.body as Record<string, unknown>;
@@ -192,23 +217,34 @@ export async function postAdminOrderPayment(req: Request, res: Response): Promis
  * administrator cannot change an amount either, and the audit entry names them.
  */
 export async function patchAdminPayment(req: Request, res: Response): Promise<void> {
-  const body = req.body as Record<string, unknown>;
-
-  // Found without a merchant scope, then annotated with its own merchant's id: support
+  // Found without a merchant scope, then corrected with its own merchant's id: support
   // works from a payment id, and the entry carries the merchant it belongs to.
   const existing = await adminLoadPayment(req.params.id!);
 
-  const entry = await annotatePayment({
+  const { entry, payable } = await correctPayment({
     merchantId: existing.merchantId,
     paymentId: String(existing._id),
-    ...('reference' in body ? { reference: optionalString(body.reference) ?? null } : {}),
-    ...('notes' in body ? { notes: optionalString(body.notes) ?? null } : {}),
-    ...(optionalDate(body.paidAt) ? { paidAt: optionalDate(body.paidAt)! } : {}),
+    ...readPaymentCorrection(req.body as Record<string, unknown>),
     actor: adminActor(req),
     req,
   });
 
-  sendData(res, { payment: presentPaymentEntry(entry) });
+  sendData(res, { payment: presentPaymentEntry(entry), payable });
+}
+
+/** Deletes a payment recorded by mistake, on the merchant's behalf. */
+export async function deleteAdminPayment(req: Request, res: Response): Promise<void> {
+  const existing = await adminLoadPayment(req.params.id!);
+
+  const { payment, payable } = await deletePayment({
+    merchantId: existing.merchantId,
+    paymentId: String(existing._id),
+    reason: readDeleteReason(req),
+    actor: adminActor(req),
+    req,
+  });
+
+  sendData(res, { deleted: true, payment: presentPaymentEntry(payment), payable });
 }
 
 /* ------------------------------- installments ------------------------------ */
