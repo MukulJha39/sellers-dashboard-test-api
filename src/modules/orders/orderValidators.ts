@@ -161,6 +161,11 @@ export const orderPaymentRules: ValidationChain[] = [
     .isInt({ min: 1, max: MAX_INSTALLMENTS })
     .withMessage('Choose an instalment on this plan.')
     .toInt(),
+  body('keepExtraAsAdvance')
+    .optional({ values: 'null' })
+    .isBoolean()
+    .withMessage('keepExtraAsAdvance must be true or false.')
+    .toBoolean(),
 ];
 
 export const installmentPlanRules: ValidationChain[] = [

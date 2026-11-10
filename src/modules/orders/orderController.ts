@@ -180,6 +180,7 @@ export async function postOrderPayment(req: Request, res: Response): Promise<voi
     paidAt: optionalDate(body.paidAt) ?? null,
     notes: optionalString(body.notes) ?? null,
     installmentNumber: body.installmentNumber === undefined ? null : Number(body.installmentNumber),
+    keepExtraAsAdvance: body.keepExtraAsAdvance === true,
     actor: merchantActor(req),
     req,
   });

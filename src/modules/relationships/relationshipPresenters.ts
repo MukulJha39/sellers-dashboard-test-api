@@ -42,6 +42,7 @@ export function presentCustomer(customer: CustomerDocument) {
     language: customer.language,
 
     outstandingMinor: customer.outstandingMinor,
+    advanceMinor: customer.advanceMinor ?? 0,
     orderCount: customer.orderCount,
     lastOrderAt: customer.lastOrderAt ? customer.lastOrderAt.toISOString() : null,
 
@@ -146,6 +147,10 @@ export function presentPaymentEntry(entry: PaymentEntryDocument) {
     payableReference: entry.payableReference,
     direction: entry.direction,
     amountMinor: entry.amountMinor,
+    /** Paid beyond the balance and kept as the customer's advance. */
+    advanceMinor: entry.advanceMinor ?? 0,
+    /** Everything the customer handed over: `amountMinor + advanceMinor`. */
+    receivedMinor: entry.amountMinor + (entry.advanceMinor ?? 0),
     method: entry.method,
     reference: entry.reference ?? null,
     paidAt: entry.paidAt.toISOString(),

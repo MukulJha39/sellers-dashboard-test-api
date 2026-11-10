@@ -1012,6 +1012,7 @@ registerPayable<OrderDocument>('order', {
     paidMinor: doc.paidMinor,
     dueDate: doc.dueDate ?? null,
     cancelled: TERMINAL_ORDER_STATUSES.has(doc.status),
+    customerId: doc.customerId ?? null,
   }),
 
   applyPayment: (doc, next) => {

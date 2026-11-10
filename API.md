@@ -921,6 +921,7 @@ text. `sort` accepts `firstName`, `createdAt`, `outstandingMinor`, `lastOrderAt`
   "preferredChannel": "whatsapp",
   "language": "en",
   "outstandingMinor": 0,
+  "advanceMinor": 0,
   "orderCount": 0,
   "lastOrderAt": null,
   "archived": false,
@@ -933,6 +934,10 @@ text. `sort` accepts `firstName`, `createdAt`, `outstandingMinor`, `lastOrderAt`
 payment engine. **It stays zero through Phase 3**, because nothing a customer can owe
 for exists until orders arrive in Phase 4. The field is in the contract now so the
 clients render the balance surfaces against a real shape rather than a placeholder.
+
+`advanceMinor` is the customer's advance: money they paid beyond what an order asked
+for, kept with `keepExtraAsAdvance` (see `POST /orders/:id/payments`). It never goes below
+zero.
 
 `preferredChannel` is one of `sms`, `whatsapp`, `both`, `none`; `language` is `en` or
 `hi`. Both come from `catalog/meta`.
@@ -1171,6 +1176,8 @@ reference and notes (PRD section 9).
   "payableReference": "PUR-0007",
   "direction": "out",
   "amountMinor": 50000,
+  "advanceMinor": 0,
+  "receivedMinor": 50000,
   "method": "bank_transfer",
   "reference": "NEFT-5521",
   "paidAt": "2026-09-05T00:00:00.000Z",
@@ -1186,6 +1193,11 @@ reference and notes (PRD section 9).
 **Amounts are always positive**; `direction` says which way the money went (`out` to a
 supplier, `in` from a customer). A total can never be made to disagree with the sum of
 its entries by a stray sign.
+
+`amountMinor` is what the entry put towards the order or purchase — the payable's
+`paidMinor` is always the sum of these. `advanceMinor` is any extra kept as the customer's
+advance, and `receivedMinor` (`amountMinor + advanceMinor`) is everything the customer
+handed over. For a payment with no advance the two amounts are equal.
 
 `balanceAfterMinor` is what was still outstanding after this entry, so a payment row
 reads on its own. `actorType` is `merchant` or `admin`, so a client can tell the merchant
@@ -1203,8 +1215,13 @@ Fix a payment entered with the wrong amount, and/or what the entry says about it
 { "reference": "CHQ-00012", "paidAt": "2026-10-02T00:00:00.000Z", "notes": "Cheque number was wrong" }
 ```
 
-All fields are optional: `amountMinor` (whole paise, at least 1), `reference`, `paidAt`,
-`notes` and `reason` (up to 300 characters, kept in the audit trail). An explicit `null`
+All fields are optional: `amountMinor` (whole paise, at least 1), `keepExtraAsAdvance`,
+`reference`, `paidAt`, `notes` and `reason` (up to 300 characters, kept in the audit trail).
+
+`amountMinor` is the **amount received** (`receivedMinor`), advance included. Raising it
+settles the order's balance first; with `keepExtraAsAdvance: true` anything beyond that is
+added to the customer's advance, without it the old `409` applies. Lowering it comes out of
+this payment's advance first, then out of the order. An explicit `null`
 clears `reference` or `notes`. **`method` is still `422`** — the payment method cannot change.
 
 `200`
@@ -1234,6 +1251,8 @@ Refused with `409 CONFLICT`:
 |---|---|
 | The new amount would take the total paid past the order or purchase total | `maxAmountMinor`, `total`, `paid` |
 | Raising a payment on a cancelled order or purchase (lowering or deleting is allowed) | — |
+| `keepExtraAsAdvance` on an order with no customer | — |
+| Lowering would take back advance the customer has already used | `advanceMinor`, `requiredMinor` |
 
 Audited as `payment.corrected` with the old and new amounts and the reason. A change that
 leaves the amount alone is audited as `payment.annotated`, as before.
@@ -1247,6 +1266,9 @@ be sent in the JSON body or as `?reason=` (for clients that cannot send a body w
 `payment` is what was removed, `payable` is the same summary as above. The payable is
 rebuilt from the payments that remain, exactly as for a correction. Audited as
 `payment.deleted`, with a full copy of the removed payment in the audit metadata.
+
+Any advance the payment kept is taken back from the customer first. If they have already
+used it, the delete is `409` with `meta: { advanceMinor, requiredMinor }` and nothing changes.
 
 ### Admin
 
@@ -1426,6 +1448,15 @@ in Phase 5.
 The shared payment engine, with `direction: "in"`. `201` returns `{ payment, order }`.
 Overpayment is refused with `meta: { outstanding, total, paid }`, exactly as for a
 purchase. `installmentNumber` is optional — see allocation below.
+
+**Keeping the extra as advance.** Send `"keepExtraAsAdvance": true` to accept an amount
+above the outstanding balance: the balance is applied to the order (which becomes
+`fully_paid`) and the rest is added to the customer's `advanceMinor`. The entry records
+both parts (`amountMinor`, `advanceMinor`, `receivedMinor`). `paidMinor` never exceeds
+`totalMinor`. Still `409` when the order has no customer, is cancelled or returned, or is
+already fully paid. Audited as `payment.recorded` (with `receivedMinor`, `appliedMinor`,
+`advanceMinor` in the metadata) plus `customer.advance_credited` on the customer; taking
+an advance back on a correction or delete is audited as `customer.advance_reversed`.
 
 **OrderView**
 

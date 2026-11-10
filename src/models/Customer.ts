@@ -44,6 +44,13 @@ export interface CustomerDocument extends Document<Types.ObjectId> {
    */
   outstandingMinor: number;
 
+  /**
+   * Money the customer paid beyond what their orders asked for, kept as their advance.
+   * Credited by the payment engine when a payment is recorded with `keepExtraAsAdvance`,
+   * and taken back first when such a payment is lowered or deleted.
+   */
+  advanceMinor: number;
+
   /** Denormalised counters for the customer list, so a row needs no extra query. */
   orderCount: number;
   lastOrderAt?: Date | null;
@@ -87,6 +94,7 @@ const customerSchema = new Schema<CustomerDocument>(
     language: { type: String, required: true, enum: CONTACT_LANGUAGES, default: 'en' },
 
     outstandingMinor: { type: Number, required: true, default: 0, min: 0 },
+    advanceMinor: { type: Number, required: true, default: 0, min: 0 },
     orderCount: { type: Number, required: true, default: 0, min: 0 },
     lastOrderAt: { type: Date, default: null },
 

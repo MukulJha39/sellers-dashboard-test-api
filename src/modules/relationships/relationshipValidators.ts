@@ -287,6 +287,11 @@ export const paymentAnnotateRules: ValidationChain[] = [
     .withMessage('Enter an amount greater than zero, as a whole number of paise.')
     .toInt(),
   correctionReason(),
+  body('keepExtraAsAdvance')
+    .optional({ values: 'null' })
+    .isBoolean()
+    .withMessage('keepExtraAsAdvance must be true or false.')
+    .toBoolean(),
   body('method')
     .not()
     .exists()

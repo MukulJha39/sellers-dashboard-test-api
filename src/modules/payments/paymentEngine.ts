@@ -8,6 +8,7 @@ import type {
   PaymentStatus,
 } from '../../config/commerce';
 import { withTransaction } from '../../db/transaction';
+import { Customer } from '../../models/Customer';
 import { PaymentEntry, type PaymentEntryDocument } from '../../models/PaymentEntry';
 import { writeAudit } from '../../services/auditService';
 import { AppError, ErrorCode } from '../../utils/AppError';
@@ -42,6 +43,11 @@ export interface PayableSnapshot {
   dueDate?: Date | null;
   /** A cancelled payable takes no further payments. */
   cancelled: boolean;
+  /**
+   * The customer an overpayment can be kept for as an advance. Only orders have one, and
+   * only when the order names a customer.
+   */
+  customerId?: Types.ObjectId | null;
 }
 
 /**
@@ -145,6 +151,93 @@ export function outstandingMinor(totalMinor: number, paidMinor: number): number 
   return Math.max(0, totalMinor - paidMinor);
 }
 
+/* --------------------------------- advances -------------------------------- */
+
+/**
+ * Credits (positive) or takes back (negative) part of a customer's advance.
+ *
+ * The take-back is conditional on the balance, so an advance that was already spent can
+ * never be driven below zero.
+ */
+async function adjustCustomerAdvance(
+  merchantId: Types.ObjectId,
+  customerId: Types.ObjectId,
+  deltaMinor: number,
+  session?: ClientSession,
+): Promise<{ from: number; to: number }> {
+  const filter: Record<string, unknown> = { _id: customerId, merchantId };
+  if (deltaMinor < 0) filter.advanceMinor = { $gte: -deltaMinor };
+
+  const updated = await Customer.findOneAndUpdate(
+    filter,
+    { $inc: { advanceMinor: deltaMinor } },
+    { new: true, session: session ?? null },
+  );
+
+  if (!updated) {
+    const customer = await Customer.findOne({ _id: customerId, merchantId }).session(
+      session ?? null,
+    );
+    if (!customer) {
+      throw AppError.conflict(
+        "This payment's customer no longer exists, so its advance cannot be changed.",
+      );
+    }
+    throw new AppError(
+      409,
+      ErrorCode.CONFLICT,
+      `${describeMoneyMinor(-deltaMinor)} of this payment was kept as advance, but the customer ` +
+        `has only ${describeMoneyMinor(customer.advanceMinor)} of advance left; the rest has already been used.`,
+      { meta: { advanceMinor: customer.advanceMinor, requiredMinor: -deltaMinor } },
+    );
+  }
+
+  return { from: updated.advanceMinor - deltaMinor, to: updated.advanceMinor };
+}
+
+/** The customer an overpayment is kept for, or a 409 when there is none. */
+function advanceCustomerFor(
+  snapshot: PayableSnapshot,
+  direction: PaymentDirection,
+): Types.ObjectId {
+  if (direction !== 'in' || !snapshot.customerId) {
+    throw AppError.conflict(
+      'This order has no customer, so the extra amount cannot be kept as advance.',
+    );
+  }
+  return snapshot.customerId;
+}
+
+/** A customer-side audit entry, so the advance has its own history. */
+async function auditAdvance(input: {
+  actor: PaymentActor;
+  customerId: Types.ObjectId;
+  change: { from: number; to: number };
+  payableReference: string;
+  paymentId: Types.ObjectId;
+  req?: Request;
+}): Promise<void> {
+  const delta = input.change.to - input.change.from;
+  if (delta === 0) return;
+  await writeAudit({
+    actorType: input.actor.type,
+    actorId: input.actor.id ?? null,
+    actorLabel: input.actor.label,
+    action: delta > 0 ? 'customer.advance_credited' : 'customer.advance_reversed',
+    targetType: 'customer',
+    targetId: input.customerId,
+    summary:
+      delta > 0
+        ? `Kept ${describeMoneyMinor(delta)} paid on ${input.payableReference} as advance; ` +
+          `advance is now ${describeMoneyMinor(input.change.to)}.`
+        : `Took back ${describeMoneyMinor(-delta)} of advance from a payment on ` +
+          `${input.payableReference}; advance is now ${describeMoneyMinor(input.change.to)}.`,
+    changes: [{ field: 'advanceMinor', from: input.change.from, to: input.change.to }],
+    metadata: { paymentId: String(input.paymentId), payableReference: input.payableReference },
+    req: input.req,
+  });
+}
+
 export interface RecordPaymentInput {
   merchantId: Types.ObjectId;
   payableType: PayableType;
@@ -156,6 +249,11 @@ export interface RecordPaymentInput {
   notes?: string | null;
   /** Which installment of the payable's plan this settles, where it has one. */
   installmentNumber?: number | null;
+  /**
+   * When the amount is more than the balance: settle the balance and keep the rest as
+   * the customer's advance, instead of refusing the payment.
+   */
+  keepExtraAsAdvance?: boolean;
   actor: PaymentActor;
   req?: Request;
 }
@@ -163,6 +261,8 @@ export interface RecordPaymentInput {
 export interface RecordPaymentResult {
   entry: PaymentEntryDocument;
   snapshot: PayableSnapshot;
+  /** The customer's advance before and after, when part of the payment was kept as one. */
+  advance?: { customerId: Types.ObjectId; from: number; to: number } | null;
 }
 
 /**
@@ -199,9 +299,13 @@ export async function recordPayment(input: RecordPaymentInput): Promise<RecordPa
       throw AppError.conflict('This is already fully paid.');
     }
 
-    // Refused rather than capped. A merchant who typed 50,000 instead of 5,000 needs
-    // to be told, not quietly given a receipt for a different number.
-    if (input.amountMinor > outstanding) {
+    // Refused rather than capped, unless the merchant said to keep the extra as advance.
+    // A merchant who typed 50,000 instead of 5,000 needs to be told, not quietly given a
+    // receipt for a different number.
+    let advanceCustomerId: Types.ObjectId | null = null;
+    if (input.amountMinor > outstanding && input.keepExtraAsAdvance) {
+      advanceCustomerId = advanceCustomerFor(before, adapter.direction);
+    } else if (input.amountMinor > outstanding) {
       throw new AppError(
         409,
         ErrorCode.CONFLICT,
@@ -210,7 +314,10 @@ export async function recordPayment(input: RecordPaymentInput): Promise<RecordPa
       );
     }
 
-    const paidMinor = before.paidMinor + input.amountMinor;
+    // The order takes only what it is owed; the rest is the customer's advance.
+    const appliedMinor = Math.min(input.amountMinor, outstanding);
+    const advanceMinor = input.amountMinor - appliedMinor;
+    const paidMinor = before.paidMinor + appliedMinor;
     const paymentStatus = derivePaymentStatus(before.totalMinor, paidMinor);
     const balanceAfter = outstandingMinor(before.totalMinor, paidMinor);
 
@@ -229,7 +336,9 @@ export async function recordPayment(input: RecordPaymentInput): Promise<RecordPa
           payableId: before.id,
           payableReference: before.reference,
           direction: adapter.direction,
-          amountMinor: input.amountMinor,
+          amountMinor: appliedMinor,
+          advanceMinor,
+          advanceCustomerId: advanceMinor > 0 ? advanceCustomerId : null,
           method: input.method,
           reference: input.reference ?? null,
           paidAt,
@@ -244,10 +353,25 @@ export async function recordPayment(input: RecordPaymentInput): Promise<RecordPa
       { session, ordered: true },
     );
 
+    const advance =
+      advanceMinor > 0 && advanceCustomerId
+        ? {
+            customerId: advanceCustomerId,
+            ...(await adjustCustomerAdvance(
+              input.merchantId,
+              advanceCustomerId,
+              advanceMinor,
+              session,
+            )),
+          }
+        : null;
+
     if (adapter.afterPayment) await adapter.afterPayment(doc, session);
 
-    return { entry: entry!, snapshot: adapter.snapshot(doc) };
+    return { entry: entry!, snapshot: adapter.snapshot(doc), advance, appliedMinor, advanceMinor };
   });
+
+  const { appliedMinor, advanceMinor } = result;
 
   await writeAudit({
     actorType: input.actor.type,
@@ -258,23 +382,43 @@ export async function recordPayment(input: RecordPaymentInput): Promise<RecordPa
     targetId: result.snapshot.id,
     summary:
       `Recorded ${describeMoneyMinor(input.amountMinor)} against ${result.snapshot.label} ` +
-      `by ${input.method}; ${describeMoneyMinor(outstandingMinor(result.snapshot.totalMinor, result.snapshot.paidMinor))} outstanding.`,
+      `by ${input.method}; ${describeMoneyMinor(outstandingMinor(result.snapshot.totalMinor, result.snapshot.paidMinor))} outstanding.` +
+      (advanceMinor > 0
+        ? ` ${describeMoneyMinor(advanceMinor)} kept as the customer's advance.`
+        : ''),
     changes: [
       {
         field: 'paidMinor',
-        from: result.snapshot.paidMinor - input.amountMinor,
+        from: result.snapshot.paidMinor - appliedMinor,
         to: result.snapshot.paidMinor,
       },
+      ...(advanceMinor > 0 ? [{ field: 'advanceMinor', from: 0, to: advanceMinor }] : []),
     ],
     metadata: {
+      paymentId: String(result.entry._id),
       method: input.method,
       reference: input.reference ?? null,
       paidAt: paidAt.toISOString(),
+      receivedMinor: input.amountMinor,
+      appliedMinor,
+      advanceMinor,
+      advanceCustomerId: result.advance ? String(result.advance.customerId) : null,
     },
     req: input.req,
   });
 
-  return result;
+  if (result.advance) {
+    await auditAdvance({
+      actor: input.actor,
+      customerId: result.advance.customerId,
+      change: result.advance,
+      payableReference: result.snapshot.reference,
+      paymentId: result.entry._id,
+      req: input.req,
+    });
+  }
+
+  return { entry: result.entry, snapshot: result.snapshot, advance: result.advance };
 }
 
 /* ------------------------- correcting a wrong payment ------------------------ */
@@ -357,8 +501,13 @@ async function rebuildFromLedger(
 export interface CorrectPaymentInput {
   merchantId: Types.ObjectId;
   paymentId: string;
-  /** The right amount. Omitted when only the descriptive fields change. */
+  /**
+   * The right amount received: what the entry applied plus any advance it kept. Omitted
+   * when only the descriptive fields change.
+   */
   amountMinor?: number;
+  /** When raising the amount past the balance, keep the extra as the customer's advance. */
+  keepExtraAsAdvance?: boolean;
   reference?: string | null;
   paidAt?: Date;
   notes?: string | null;
@@ -397,28 +546,72 @@ export async function correctPayment(
     });
     const before = adapter.snapshot(doc);
 
-    const fromMinor = entry.amountMinor;
+    // Amounts here are what was received: the part applied to the payable plus any part
+    // kept as advance. A payment without an advance reads exactly as it always did.
+    const fromApplied = entry.amountMinor;
+    const fromAdvance = entry.advanceMinor ?? 0;
+    const fromMinor = fromApplied + fromAdvance;
     const toMinor = amountMinor ?? fromMinor;
     const increase = toMinor - fromMinor;
+    const outstanding = outstandingMinor(before.totalMinor, before.paidMinor);
 
     if (increase > 0 && before.cancelled) {
       throw AppError.conflict(
         'This record was cancelled, so a payment against it can only be lowered or deleted.',
       );
     }
-    if (increase > 0 && before.paidMinor + increase > before.totalMinor) {
-      const most = fromMinor + outstandingMinor(before.totalMinor, before.paidMinor);
-      throw new AppError(
-        409,
-        ErrorCode.CONFLICT,
-        `That would be more than the total of ${describeMoneyMinor(before.totalMinor)}. ` +
-          `This payment can be at most ${describeMoneyMinor(most)}.`,
-        { meta: { maxAmountMinor: most, total: before.totalMinor, paid: before.paidMinor } },
+
+    let toApplied = fromApplied;
+    let toAdvance = fromAdvance;
+    let advanceCustomerId: Types.ObjectId | null = entry.advanceCustomerId ?? null;
+    if (increase > 0) {
+      // The extra settles the balance first; whatever is left is advance, if allowed.
+      const extraAdvance = Math.max(0, increase - outstanding);
+      if (extraAdvance > 0 && !input.keepExtraAsAdvance) {
+        const most = fromMinor + outstanding;
+        throw new AppError(
+          409,
+          ErrorCode.CONFLICT,
+          `That would be more than the total of ${describeMoneyMinor(before.totalMinor)}. ` +
+            `This payment can be at most ${describeMoneyMinor(most)}.`,
+          { meta: { maxAmountMinor: most, total: before.totalMinor, paid: before.paidMinor } },
+        );
+      }
+      if (extraAdvance > 0) {
+        const customerId = advanceCustomerFor(before, adapter.direction);
+        if (advanceCustomerId && fromAdvance > 0 && !advanceCustomerId.equals(customerId)) {
+          throw AppError.conflict(
+            "This payment's advance belongs to a different customer than the order now has.",
+          );
+        }
+        advanceCustomerId = customerId;
+      }
+      toApplied = fromApplied + (increase - extraAdvance);
+      toAdvance = fromAdvance + extraAdvance;
+    } else if (increase < 0) {
+      // A lower amount comes out of the advance first, then out of the payable.
+      const decrease = -increase;
+      const takenFromAdvance = Math.min(decrease, fromAdvance);
+      toAdvance = fromAdvance - takenFromAdvance;
+      toApplied = fromApplied - (decrease - takenFromAdvance);
+    }
+
+    let advanceChange: { from: number; to: number } | null = null;
+    if (toAdvance !== fromAdvance && advanceCustomerId) {
+      advanceChange = await adjustCustomerAdvance(
+        input.merchantId,
+        advanceCustomerId,
+        toAdvance - fromAdvance,
+        session,
       );
     }
 
     const set: Record<string, unknown> = {};
-    if (increase !== 0) set.amountMinor = toMinor;
+    if (toApplied !== fromApplied) set.amountMinor = toApplied;
+    if (toAdvance !== fromAdvance) {
+      set.advanceMinor = toAdvance;
+      set.advanceCustomerId = toAdvance > 0 ? advanceCustomerId : null;
+    }
     if (input.reference !== undefined) set.reference = input.reference;
     if (input.notes !== undefined) set.notes = input.notes;
     if (input.paidAt !== undefined) set.paidAt = input.paidAt;
@@ -431,13 +624,27 @@ export async function correctPayment(
     if (Object.keys(set).length > 0) {
       await PaymentEntry.updateOne({ _id: entry._id }, { $set: set }, session ? { session } : {});
     }
-    if (increase !== 0) await rebuildFromLedger(adapter, doc, entry.payableType, session);
+    if (toApplied !== fromApplied) {
+      await rebuildFromLedger(adapter, doc, entry.payableType, session);
+    }
 
     const updated = await loadEntry(input.merchantId, input.paymentId, session);
-    return { entry: updated, after: adapter.snapshot(doc), before, fromMinor, toMinor, detailsBefore };
+    return {
+      entry: updated,
+      after: adapter.snapshot(doc),
+      before,
+      fromMinor,
+      toMinor,
+      fromAdvance,
+      toAdvance,
+      advanceChange,
+      advanceCustomerId,
+      detailsBefore,
+    };
   });
 
-  const { entry, after, before, fromMinor, toMinor, detailsBefore } = outcome;
+  const { entry, after, before, fromMinor, toMinor, fromAdvance, toAdvance, detailsBefore } =
+    outcome;
   const reason = input.reason?.trim() || null;
 
   await writeAudit({
@@ -453,17 +660,39 @@ export async function correctPayment(
           'The amount was not changed.'
         : `Changed a payment on ${entry.payableReference} from ${describeMoneyMinor(fromMinor)} to ` +
           `${describeMoneyMinor(toMinor)}; ${describeMoneyMinor(outstandingMinor(after.totalMinor, after.paidMinor))} ` +
-          `outstanding.${reason ? ` Reason: ${reason}` : ''}`,
+          `outstanding.` +
+          (toAdvance !== fromAdvance
+            ? ` Advance kept from this payment went from ${describeMoneyMinor(fromAdvance)} ` +
+              `to ${describeMoneyMinor(toAdvance)}.`
+            : '') +
+          (reason ? ` Reason: ${reason}` : ''),
     changes: [
       { field: 'amountMinor', from: fromMinor, to: toMinor },
       { field: 'paidMinor', from: before.paidMinor, to: after.paidMinor },
+      { field: 'advanceMinor', from: fromAdvance, to: toAdvance },
       { field: 'reference', from: detailsBefore.reference, to: entry.reference ?? null },
       { field: 'paidAt', from: detailsBefore.paidAt, to: entry.paidAt.toISOString() },
       { field: 'notes', from: detailsBefore.notes, to: entry.notes ?? null },
     ].filter((change) => change.from !== change.to),
-    metadata: { paymentId: String(entry._id), method: entry.method, reason },
+    metadata: {
+      paymentId: String(entry._id),
+      method: entry.method,
+      reason,
+      advanceCustomerId: outcome.advanceCustomerId ? String(outcome.advanceCustomerId) : null,
+    },
     req: input.req,
   });
+
+  if (outcome.advanceChange && outcome.advanceCustomerId) {
+    await auditAdvance({
+      actor: input.actor,
+      customerId: outcome.advanceCustomerId,
+      change: outcome.advanceChange,
+      payableReference: entry.payableReference,
+      paymentId: entry._id,
+      req: input.req,
+    });
+  }
 
   return { entry, payable: summarise(entry.payableType, after) };
 }
@@ -495,13 +724,22 @@ export async function deletePayment(
     });
     const before = adapter.snapshot(doc);
 
+    // The advance this payment created is taken back first; if it was already spent the
+    // delete is refused, so the customer's advance never goes negative.
+    const kept = entry.advanceMinor ?? 0;
+    const advanceChange =
+      kept > 0 && entry.advanceCustomerId
+        ? await adjustCustomerAdvance(input.merchantId, entry.advanceCustomerId, -kept, session)
+        : null;
+
     await PaymentEntry.deleteOne({ _id: entry._id }, session ? { session } : {});
     await rebuildFromLedger(adapter, doc, entry.payableType, session);
 
-    return { entry, before, after: adapter.snapshot(doc) };
+    return { entry, before, after: adapter.snapshot(doc), advanceChange };
   });
 
-  const { entry, before, after } = outcome;
+  const { entry, before, after, advanceChange } = outcome;
+  const advanceMinor = entry.advanceMinor ?? 0;
   const reason = input.reason?.trim() || null;
 
   await writeAudit({
@@ -512,16 +750,21 @@ export async function deletePayment(
     targetType: entry.payableType,
     targetId: entry.payableId,
     summary:
-      `Deleted a ${describeMoneyMinor(entry.amountMinor)} ${entry.method} payment on ${entry.payableReference}; ` +
+      `Deleted a ${describeMoneyMinor(entry.amountMinor + advanceMinor)} ${entry.method} payment on ${entry.payableReference}; ` +
       `${describeMoneyMinor(outstandingMinor(after.totalMinor, after.paidMinor))} outstanding.` +
       (reason ? ` Reason: ${reason}` : ''),
-    changes: [{ field: 'paidMinor', from: before.paidMinor, to: after.paidMinor }],
+    changes: [
+      { field: 'paidMinor', from: before.paidMinor, to: after.paidMinor },
+      ...(advanceMinor > 0 ? [{ field: 'advanceMinor', from: advanceMinor, to: 0 }] : []),
+    ],
     metadata: {
       reason,
       // A full copy, so a deleted payment can always be accounted for later.
       payment: {
         id: String(entry._id),
         amountMinor: entry.amountMinor,
+        advanceMinor,
+        advanceCustomerId: entry.advanceCustomerId ? String(entry.advanceCustomerId) : null,
         method: entry.method,
         reference: entry.reference ?? null,
         paidAt: entry.paidAt.toISOString(),
@@ -533,6 +776,17 @@ export async function deletePayment(
     },
     req: input.req,
   });
+
+  if (advanceChange && entry.advanceCustomerId) {
+    await auditAdvance({
+      actor: input.actor,
+      customerId: entry.advanceCustomerId,
+      change: advanceChange,
+      payableReference: entry.payableReference,
+      paymentId: entry._id,
+      req: input.req,
+    });
+  }
 
   return { payment: entry, payable: summarise(entry.payableType, after) };
 }

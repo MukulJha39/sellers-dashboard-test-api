@@ -370,6 +370,7 @@ export function readPaymentCorrection(body: Record<string, unknown>) {
     ...('notes' in body ? { notes: optionalString(body.notes) ?? null } : {}),
     ...(optionalDate(body.paidAt) ? { paidAt: optionalDate(body.paidAt)! } : {}),
     ...('reason' in body ? { reason: optionalString(body.reason) ?? null } : {}),
+    keepExtraAsAdvance: body.keepExtraAsAdvance === true,
   };
 }
 

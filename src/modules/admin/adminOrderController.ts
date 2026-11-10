@@ -202,6 +202,7 @@ export async function postAdminOrderPayment(req: Request, res: Response): Promis
     paidAt: optionalDate(body.paidAt) ?? null,
     notes: optionalString(body.notes) ?? null,
     installmentNumber: body.installmentNumber === undefined ? null : Number(body.installmentNumber),
+    keepExtraAsAdvance: body.keepExtraAsAdvance === true,
     actor: adminActor(req),
     req,
   });

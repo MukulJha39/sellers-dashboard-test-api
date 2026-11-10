@@ -24,7 +24,15 @@ export interface PaymentEntryDocument extends Document<Types.ObjectId> {
   payableReference: string;
 
   direction: PaymentDirection;
+  /** What this entry put towards the payable. The payable's `paidMinor` is the sum of these. */
   amountMinor: number;
+  /**
+   * What the customer paid beyond the payable's balance, kept as their advance. The money
+   * received is `amountMinor + advanceMinor`; only `amountMinor` counts towards the payable.
+   */
+  advanceMinor: number;
+  /** The customer whose advance `advanceMinor` was credited to. */
+  advanceCustomerId?: Types.ObjectId | null;
   method: PaymentMethod;
   /** Transaction id, cheque number, UPI reference — whatever the merchant has. */
   reference?: string | null;
@@ -61,6 +69,8 @@ const paymentEntrySchema = new Schema<PaymentEntryDocument>(
 
     direction: { type: String, required: true, enum: PAYMENT_DIRECTIONS },
     amountMinor: { type: Number, required: true, min: 1 },
+    advanceMinor: { type: Number, required: true, default: 0, min: 0 },
+    advanceCustomerId: { type: Schema.Types.ObjectId, ref: 'Customer', default: null },
     method: { type: String, required: true, enum: PAYMENT_METHODS },
     reference: { type: String, default: null, trim: true, maxlength: 80 },
     paidAt: { type: Date, required: true },
@@ -96,6 +106,8 @@ const IMMUTABLE_FIELDS = [
   'payableReference',
   'direction',
   'amountMinor',
+  'advanceMinor',
+  'advanceCustomerId',
   'method',
   'installmentNumber',
   'balanceAfterMinor',
