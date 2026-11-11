@@ -130,6 +130,7 @@ import {
   putAdminStockQuantity,
 } from './adminCatalogWriteController';
 import { uploadImages } from '../../middleware/upload';
+import { excelExport, exportColumns } from '../exports/excelExport';
 import {
   adminCatalogListRules,
   adminInstallmentListRules,
@@ -777,3 +778,37 @@ adminRouter.get(
   ...validate(merchantIdParamRules),
   asyncHandler(getAdminOrderSummary),
 );
+
+/*
+ * Excel downloads of the admin lists: GET /admin/exports/<report> with the same query
+ * parameters and validation as the list it exports. Downloading needs the list's own
+ * view permission and also report.export, because a file can leave the panel.
+ */
+const adminExports = [
+  { path: 'items', permission: PERMISSIONS.ITEM_VIEW, rules: adminCatalogListRules, list: getAdminItems },
+  { path: 'services', permission: PERMISSIONS.SERVICE_VIEW, rules: adminCatalogListRules, list: getAdminServices },
+  { path: 'materials', permission: PERMISSIONS.MATERIAL_VIEW, rules: adminCatalogListRules, list: getAdminMaterials },
+  { path: 'stock-movements', permission: PERMISSIONS.STOCK_VIEW, rules: adminStockHistoryRules, list: getAdminStockMovements },
+  { path: 'low-stock', permission: PERMISSIONS.STOCK_VIEW, rules: adminCatalogListRules, list: getAdminLowStock },
+  { path: 'customers', permission: PERMISSIONS.CUSTOMER_VIEW, rules: adminRelationshipListRules, list: getAdminCustomers },
+  { path: 'suppliers', permission: PERMISSIONS.SUPPLIER_VIEW, rules: adminRelationshipListRules, list: getAdminSuppliers },
+  { path: 'purchases', permission: PERMISSIONS.PURCHASE_VIEW, rules: adminPurchaseListRules, list: getAdminPurchases },
+  { path: 'payments', permission: PERMISSIONS.PAYMENT_VIEW, rules: adminPaymentListRules, list: getAdminPayments },
+  { path: 'orders', permission: PERMISSIONS.ORDER_VIEW, rules: adminOrderListRules, list: getAdminOrders },
+  { path: 'installments', permission: PERMISSIONS.INSTALLMENT_VIEW, rules: adminInstallmentListRules, list: getAdminInstallments },
+  { path: 'receivables', permission: PERMISSIONS.PAYMENT_VIEW, rules: adminReceivablesListRules, list: getAdminReceivables },
+] as const;
+
+for (const entry of adminExports) {
+  adminRouter.get(
+    `/exports/${entry.path}/columns`,
+    requirePermission(entry.permission, PERMISSIONS.REPORT_EXPORT),
+    exportColumns({ report: entry.path, scope: 'admin' }),
+  );
+  adminRouter.get(
+    `/exports/${entry.path}`,
+    requirePermission(entry.permission, PERMISSIONS.REPORT_EXPORT),
+    ...validate(entry.rules),
+    excelExport({ report: entry.path, scope: 'admin', list: entry.list }),
+  );
+}

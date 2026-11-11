@@ -42,6 +42,12 @@ export interface OrderLine {
 
   /** quantity × rate, before any order-level discount or tax. */
   lineTotalMinor: number;
+
+  /**
+   * The item's cost price per unit when it was sold, for the profit report. Null for a
+   * service, an item with no cost price set, and orders created before it was recorded.
+   */
+  unitCostMinor?: number | null;
 }
 
 /**
@@ -142,6 +148,7 @@ const orderLineSchema = new Schema<OrderLine>(
     unitRateMinor: { type: Number, required: true, min: 0 },
     durationMinutes: { type: Number, default: null, min: 0 },
     lineTotalMinor: { type: Number, required: true, min: 0 },
+    unitCostMinor: { type: Number, default: null, min: 0 },
   },
   { _id: false },
 );
@@ -214,6 +221,8 @@ orderSchema.index({ merchantId: 1, deliveryDate: 1 });
 orderSchema.index({ merchantId: 1, status: 1, paymentStatus: 1, dueDate: 1 });
 // Finds every order that sold one item, for its sales history.
 orderSchema.index({ merchantId: 1, 'lines.subjectId': 1, orderDate: -1 });
+// The profit and money-to-collect reports read completed orders by completion date.
+orderSchema.index({ merchantId: 1, status: 1, completedAt: -1 });
 // Serves the next-due-installment lookups without scanning every order.
 orderSchema.index({ merchantId: 1, 'installments.status': 1, 'installments.dueDate': 1 });
 

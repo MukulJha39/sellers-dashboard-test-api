@@ -253,6 +253,15 @@ while the account holds a password set by somebody else (see
 | `GET` | `/receivables` | merchant | Money owed, grouped by customer |
 | `GET` | `/receivables/installments` | merchant | Unpaid instalments, soonest first |
 | `GET` | `/dashboard` | merchant | Home-screen figures |
+| `GET` | `/reports/sales` | merchant | Report: how much did I sell? |
+| `GET` | `/reports/profit-loss` | merchant | Report: how much did I earn? |
+| `GET` | `/reports/money-in-out` | merchant | Report: how much came, how much went? |
+| `GET` | `/reports/money-to-collect` | merchant | Report: who still has to pay me? |
+| `GET` | `/reports/stock` | merchant | Report: how much stock do I have? |
+| `GET` | `/reports/best-sellers` | merchant | Report: what sells the most? |
+| `GET` | `/reports/not-selling` | merchant | Report: which goods are just sitting? |
+| `GET` | `/reports/sales-by-product` | merchant | Report: which product made how much? |
+| `GET` | `/reports/sales-by-customer` | merchant | Report: who buys the most? |
 
 ### Admin panel
 
@@ -352,6 +361,57 @@ runs through the same service, so the same validation, limits and stock ledger a
 owning merchant is the one in the URL for a create, and the record's own merchant for
 everything else. Each change is audited with the admin as the actor, so the merchant can see
 that support made it.
+
+---
+
+## Excel exports
+
+Every list can be downloaded as an Excel (`.xlsx`) file, for sharing on WhatsApp or email.
+
+| Merchant app | Admin panel | Same filters as |
+|---|---|---|
+| `GET /exports/items` | `GET /admin/exports/items` | `/items` · `/admin/items` |
+| `GET /exports/services` | `GET /admin/exports/services` | `/services` |
+| `GET /exports/materials` | `GET /admin/exports/materials` | `/materials` |
+| `GET /exports/stock-movements` | `GET /admin/exports/stock-movements` | `/stock/history` · `/admin/stock-movements` |
+| — | `GET /admin/exports/low-stock` | `/admin/low-stock` |
+| `GET /exports/customers` | `GET /admin/exports/customers` | `/customers` |
+| `GET /exports/suppliers` | `GET /admin/exports/suppliers` | `/suppliers` |
+| `GET /exports/purchases` | `GET /admin/exports/purchases` | `/purchases` |
+| `GET /exports/payments` | `GET /admin/exports/payments` | `/payments` |
+| `GET /exports/orders` | `GET /admin/exports/orders` | `/orders` |
+| — | `GET /admin/exports/installments` | `/admin/installments` |
+| `GET /exports/receivables` | `GET /admin/exports/receivables` | `/receivables` (by customer) · `/admin/receivables` (by merchant) |
+
+- **Permission (admin).** An admin export needs the list's own view permission **and**
+  `report.export` — seeing a list in the panel does not by itself allow taking it out as a
+  file. Out of the box finance and super admins hold `report.export`; grant it to other
+  roles in Roles & permissions. A merchant can always export their own data.
+- **Same query as the list.** Send the filters and `sort` the list screen uses; `page` and
+  `limit` are ignored because the file holds every matching row (up to 10,000 — the
+  `About` sheet says when a file was cut short). Each export runs the list endpoint
+  itself, with its permission check and validation, so it can never disagree with the screen.
+- **Choosing columns.** `GET <export path>/columns` (for example
+  `/exports/orders/columns` or `/admin/exports/orders/columns`) lists the report's columns
+  as `{ key, header, kind }`; `kind` is `money` for amounts. Send `columns=order,total,paid`
+  (comma-separated keys) to include only those, kept in the report's own order. Omitted,
+  every column is included; an unknown key is `422`.
+- **Masking amounts.** `maskAmounts=true` writes every amount as `₹ XxXx` instead of a
+  number — for a file that should be shared without prices. The `About` sheet says whether
+  amounts are shown, hidden, or not part of the report.
+- **`utcOffsetMinutes`** (optional, minutes east of UTC, `330` for India and the default)
+  makes date-times in the file read as the reader's clock. Calendar dates such as a due
+  date or delivery date are never shifted.
+- **Response:** `200` with the file itself —
+  `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` and
+  `Content-Disposition: attachment; filename="inperge-<report>-<YYYY-MM-DD>.xlsx"`. Errors
+  use the usual JSON envelope. `X-Export-Rows` and `X-Export-Total` give the row counts.
+- **The file:** one sheet of rows with a bold, frozen, filterable header, amounts as real
+  numbers in rupees (so they add up in Excel), and an `About` sheet naming the report,
+  when and by whom it was made, and the filters used. Admin files add a Merchant column.
+
+The merchant app can download the file and hand it to the phone's share sheet, which
+offers WhatsApp, email and the rest.
 
 ---
 
@@ -1712,6 +1772,267 @@ Phase 4 adds, alongside the existing lists:
 A client that knows which transitions are legal can grey out the rest instead of offering
 a button the server will refuse — and it learns the rules from the server rather than
 keeping a second copy of the map.
+
+---
+
+## Reports (merchant app)
+
+One endpoint per card on the app's Reports screen. Every report reads only the signed-in
+merchant's own records. Money is in paise, quantities are decimals, dates are ISO strings.
+
+### What counts
+
+| Rule | Used by |
+|---|---|
+| **Sold** = an order that is `confirmed`, `in_progress`, `ready` or `completed`, by `orderDate`. Drafts, cancelled and returned orders are not sales. | sales, best sellers, by product, by customer, not selling |
+| **Profit** counts `completed` orders only, by the day they were completed (`completedAt`). | profit-loss |
+| **Money to collect** = `completed` orders that are not fully paid. Open orders are not counted. | money-to-collect |
+| **Money in** = payments received from customers (advance included). **Money out** = payments made to suppliers for purchases. Both by `paidAt`. | money-in-out |
+
+### The period
+
+Reports that cover a window take:
+
+| Query | Meaning |
+|---|---|
+| `period` | `today`, `yesterday`, `last_7_days`, `last_30_days`, `this_week` (from Monday), `last_week`, `this_month`, `last_month`, `this_year`, `custom`. Default `this_month` (`last_30_days` for not-selling). |
+| `from`, `to` | `YYYY-MM-DD`, both inclusive, for `custom`. Sending them without `period` means custom. At most 731 days. |
+| `tz` | The phone's time zone, such as `Asia/Kolkata` (the default). "Today" starts at midnight there. |
+
+Each such report returns the window it used:
+
+```json
+"period": {
+  "period": "last_month", "from": "2026-10-01", "to": "2026-10-31", "days": 31,
+  "timezone": "Asia/Kolkata", "bucket": "day",
+  "previous": { "from": "2026-09-01", "to": "2026-09-30" }
+}
+```
+
+`previous` is the window that `comparison` is measured against: the same number of days
+just before, except `this_month` (same days of last month), `last_month` (the month before)
+and `this_year` (same days of last year). `series` has one point per day (`"2026-10-05"`)
+for windows up to 62 days, and one per month (`"2026-10"`) beyond. Days with nothing in
+them are still there, with zeros. A `*ChangePercent` is `null` when the previous window
+was zero and this one is not.
+
+Paged reports take `page` and `limit` (max 100) and return `items` and `meta` like the
+lists. `sort` takes a field, or `-field` to reverse it.
+
+### `GET /api/v1/reports/sales` — How much did I sell?
+
+```json
+{
+  "period": { … },
+  "summary": {
+    "totalMinor": 1250000, "orderCount": 48, "averageOrderMinor": 26042,
+    "grossMinor": 1300000, "discountMinor": 70000, "taxMinor": 20000,
+    "collectedMinor": 900000, "outstandingMinor": 350000,
+    "customerCount": 31, "walkInOrders": 9
+  },
+  "byPaymentStatus": [
+    { "paymentStatus": "fully_paid", "orderCount": 30, "totalMinor": 800000 },
+    { "paymentStatus": "partially_paid", "orderCount": 8, "totalMinor": 300000 },
+    { "paymentStatus": "unpaid", "orderCount": 10, "totalMinor": 150000 }
+  ],
+  "comparison": { "totalMinor": 1100000, "orderCount": 41, "totalChangePercent": 13.6, "orderChangePercent": 17.1 },
+  "series": [{ "date": "2026-11-01", "totalMinor": 42000, "orderCount": 2 }]
+}
+```
+
+`totalMinor` is what customers were billed (after discount, with tax). `grossMinor` is
+before discount and tax. `collectedMinor` is what has been paid so far on these orders.
+
+### `GET /api/v1/reports/profit-loss` — How much did I earn?
+
+Completed orders only.
+
+```json
+{
+  "period": { … },
+  "summary": {
+    "orderCount": 20, "totalMinor": 520000, "taxMinor": 20000, "discountMinor": 15000,
+    "revenueMinor": 500000, "itemSalesMinor": 410000, "serviceSalesMinor": 105000,
+    "costMinor": 260000, "profitMinor": 240000, "isLoss": false, "marginPercent": 48
+  },
+  "missingCost": { "lineCount": 3, "productCount": 2, "productIds": ["66f…", "66f…"] },
+  "comparison": { "revenueMinor": 450000, "profitMinor": 200000, "revenueChangePercent": 11.1, "profitChangePercent": 20 },
+  "series": [{ "date": "2026-11-01", "revenueMinor": 30000, "costMinor": 14000, "profitMinor": 16000, "orderCount": 1 }]
+}
+```
+
+- `revenueMinor` = sales after discount, before tax. Tax is the government's, not income.
+- `costMinor` = for each product sold, quantity × its cost price. The cost price is saved
+  on the order line when the order is made, so changing a cost price later does not change
+  past profit. Orders made before this was added use the product's current cost price.
+- Services have no cost.
+- A product with no cost price counts as costing nothing. `missingCost` lists those
+  products (first 50 ids), so the app can say "profit is too high until you add cost
+  prices for 2 products" and link to them.
+- `profitMinor` = `revenueMinor − costMinor`. Negative means a loss (`isLoss: true`).
+  `marginPercent` is `null` when there was no revenue.
+
+### `GET /api/v1/reports/money-in-out` — How much came, how much went?
+
+```json
+{
+  "period": { … },
+  "summary": { "inMinor": 900000, "outMinor": 400000, "netMinor": 500000, "isNegative": false },
+  "in": {
+    "totalMinor": 900000, "paymentCount": 40, "advanceMinor": 5000,
+    "byMethod": [{ "method": "upi", "totalMinor": 600000, "count": 25 }]
+  },
+  "out": {
+    "totalMinor": 400000, "paymentCount": 6,
+    "rawMaterialsMinor": 300000, "goodsMinor": 100000,
+    "byMethod": [{ "method": "bank_transfer", "totalMinor": 400000, "count": 6 }]
+  },
+  "comparison": { "inMinor": 800000, "outMinor": 450000, "netMinor": 350000, "inChangePercent": 12.5, "outChangePercent": -11.1 },
+  "series": [{ "date": "2026-11-01", "inMinor": 30000, "outMinor": 0, "netMinor": 30000 }]
+}
+```
+
+Money in is every customer payment, including any part kept as the customer's advance
+(`in.advanceMinor`). Money out is every payment made against a purchase. A purchase can mix
+raw materials and products bought to resell, so each payment is split into
+`rawMaterialsMinor` and `goodsMinor` in the same proportion as that purchase's lines.
+
+### `GET /api/v1/reports/money-to-collect` — Who still has to pay me?
+
+Completed orders that are not fully paid. No period: it is what is owed right now.
+
+| Query | Meaning |
+|---|---|
+| `view` | `customer` (default): one row per customer. `order`: one row per order. |
+| `customerId` | One customer's orders (implies `view=order`). |
+| `overdue` | `true` for only orders past their due date. |
+| `sort` | `outstanding` (default, biggest first), `oldest`, `due`, `name`. |
+
+```json
+{
+  "summary": {
+    "outstandingMinor": 350000, "orderCount": 12, "customerCount": 9, "walkInIncluded": true,
+    "overdueMinor": 120000, "overdueOrders": 4, "oldestPendingDays": 41
+  },
+  "view": "customer",
+  "items": [{
+    "customerId": "66f…", "customerName": "Kavita Joshi", "phoneE164": "+919812345678",
+    "orderCount": 2, "totalMinor": 90000, "paidMinor": 30000, "outstandingMinor": 60000,
+    "overdueMinor": 60000, "isOverdue": true, "advanceMinor": 0,
+    "oldestCompletedAt": "2026-10-01T10:00:00.000Z", "pendingDays": 41,
+    "nextDueDate": "2026-10-15T00:00:00.000Z"
+  }],
+  "meta": { "page": 1, "limit": 20, "total": 9, "totalPages": 1, "hasNextPage": false }
+}
+```
+
+`view=order` rows: `orderId`, `reference`, `customerId`, `customerName`, `totalMinor`,
+`paidMinor`, `outstandingMinor`, `orderDate`, `completedAt`, `dueDate`, `isOverdue`,
+`pendingDays`. Walk-in sales have `customerId: null` and `customerName: "Walk-in sale"`.
+`summary` always covers everything owed, whatever the filters.
+
+### `GET /api/v1/reports/stock` — How much stock do I have?
+
+| Query | Meaning |
+|---|---|
+| `type` | `item` (default: products), `material`, `all`. |
+| `status` | `in_stock`, `low`, `out`, `untracked`. |
+| `q` | Name search. |
+| `sort` | `status` (default: out of stock first, then low), `name`, `quantity`, `value`. |
+
+```json
+{
+  "summary": {
+    "productCount": 42, "inStock": 30, "lowStock": 5, "outOfStock": 4, "untracked": 3,
+    "stockValueMinor": 1850000, "saleValueMinor": 3200000, "withoutCostPrice": 6
+  },
+  "items": [{
+    "subjectType": "item", "id": "66f…", "name": "Masala Chai", "unit": "piece",
+    "trackStock": true, "quantity": 0, "lowStockThreshold": 5, "status": "out",
+    "unitCostMinor": 2000, "sellingPriceMinor": 4500,
+    "stockValueMinor": 0, "saleValueMinor": 0
+  }],
+  "meta": { … }
+}
+```
+
+`stockValueMinor` is stock on hand at cost (`null` when no cost price is set);
+`saleValueMinor` is at selling price. Summary figures cover the whole `type`, not just the
+filtered rows. **To update stock from this screen**, use the row's `subjectType` and `id`
+with `POST /stock/:subjectType/:subjectId/adjust` (add or remove) or
+`POST /stock/:subjectType/:subjectId/quantity` (set a counted quantity), then reload.
+
+### `GET /api/v1/reports/best-sellers` — What sells the most?
+
+Takes the period, plus `lineType` (`item` default, `service`, `all`) and `sort`
+(`quantity` default, `revenue`, `orders`).
+
+```json
+{
+  "period": { … },
+  "summary": { "productCount": 18, "revenueMinor": 1250000 },
+  "items": [{
+    "rank": 1, "lineType": "item", "subjectId": "66f…", "name": "Masala Chai",
+    "unit": "piece", "billingUnit": null, "quantity": 120, "revenueMinor": 540000,
+    "revenueSharePercent": 43.2, "orderCount": 37, "lastSoldAt": "2026-11-10T12:00:00.000Z"
+  }],
+  "meta": { … }
+}
+```
+
+Change `period` to see best sellers for today, this week, last month and so on.
+
+### `GET /api/v1/reports/sales-by-product` — Which product made how much?
+
+The same rows as best sellers, but `lineType` defaults to `all` (products and services)
+and `sort` to `revenue`.
+
+### `GET /api/v1/reports/not-selling` — Which goods are just sitting?
+
+Every active product. The period (default `last_30_days`) is the window "sold" is counted in.
+
+| Query | Meaning |
+|---|---|
+| `sort` | `sold` (default: least sold at the top), `lastSold`, `lastPurchased`, `stock`, `value`, `name`. `-` reverses. |
+| `unsold` | `true` for only products with no sale in the window. |
+| `inStock` | `true` for only products with stock on hand. |
+
+```json
+{
+  "period": { … },
+  "summary": { "productCount": 42, "unsoldCount": 7, "neverSoldCount": 2, "idleStockValueMinor": 96000 },
+  "items": [{
+    "id": "66f…", "name": "Idle Jar", "unit": "piece", "trackStock": true,
+    "quantity": 5, "soldQuantity": 0, "revenueMinor": 0,
+    "lastSoldAt": null, "daysSinceLastSale": null,
+    "lastPurchasedAt": "2026-09-02T00:00:00.000Z", "daysSinceLastPurchase": 70,
+    "stockValueMinor": 20000, "neverSold": true, "addedAt": "2026-08-01T10:00:00.000Z"
+  }],
+  "meta": { … }
+}
+```
+
+`lastSoldAt` and `lastPurchasedAt` are the latest ever, not only within the window.
+`idleStockValueMinor` is the cost of stock that did not sell at all in the window.
+
+### `GET /api/v1/reports/sales-by-customer` — Who buys the most?
+
+Takes the period, `sort` (`spent` default, `orders`, `outstanding`, `lastOrder`) and
+`walkIn=true` to include walk-in sales as one row.
+
+```json
+{
+  "period": { … },
+  "summary": { "customerCount": 31, "totalMinor": 1100000 },
+  "items": [{
+    "rank": 1, "customerId": "66f…", "customerName": "Kavita Joshi", "phoneE164": "+919812345678",
+    "orderCount": 6, "totalMinor": 180000, "averageOrderMinor": 30000,
+    "paidMinor": 150000, "outstandingMinor": 30000, "sharePercent": 16.4,
+    "firstOrderAt": "2026-11-01T10:00:00.000Z", "lastOrderAt": "2026-11-09T18:00:00.000Z"
+  }],
+  "meta": { … }
+}
+```
 
 ---
 

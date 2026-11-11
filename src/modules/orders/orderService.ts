@@ -181,6 +181,7 @@ async function buildLines(
         unitRateMinor,
         durationMinutes: null,
         lineTotalMinor: 0,
+        unitCostMinor: item.costPriceMinor ?? null,
       });
       continue;
     }
@@ -219,6 +220,7 @@ async function buildLines(
       unitRateMinor,
       durationMinutes,
       lineTotalMinor: 0,
+      unitCostMinor: null,
     });
   }
 

@@ -12,6 +12,8 @@ import { catalogRouter } from './modules/catalog/catalogRoutes';
 import { orderRouter } from './modules/orders/orderRoutes';
 import { relationshipRouter } from './modules/relationships/relationshipRoutes';
 import { authRouter } from './modules/auth/authRoutes';
+import { exportRouter } from './modules/exports/exportRoutes';
+import { reportRouter } from './modules/reports/reportRoutes';
 import { healthRouter } from './modules/health/healthRoutes';
 import { merchantRouter } from './modules/merchant/merchantRoutes';
 import { AppError } from './utils/AppError';
@@ -77,6 +79,10 @@ export function createApp(): Express {
   app.use(env.apiPrefix, relationshipRouter);
   // Orders, instalments, receivables and the dashboard share a third.
   app.use(env.apiPrefix, orderRouter);
+  // Excel downloads of the merchant lists, for the app to share.
+  app.use(`${env.apiPrefix}/exports`, exportRouter);
+  // The merchant's Reports screen: sales, profit, cash, stock and customers.
+  app.use(`${env.apiPrefix}/reports`, reportRouter);
   app.use(`${env.apiPrefix}/admin`, adminRouter);
 
   app.use(notFoundHandler);
